@@ -1,0 +1,16 @@
+# Normalize line endings: store LF, check out LF on every platform, so a Windows
+# checkout and a Linux checkout produce identical bytes and diffs stay small.
+* text=auto eol=lf
+
+# Files git must never touch: a stray newline here corrupts them.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.exe binary
+*.zip binary
+
+# Keep these out of language statistics.
+package-lock.json linguist-generated=true

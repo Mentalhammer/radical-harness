@@ -1,0 +1,2955 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vaelen</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        --bg: #0d1117;
+        --panel: #161b22;
+        --panel-2: #1c2430;
+        --line: #2b3440;
+        --text: #e6edf3;
+        --muted: #8b98a5;
+        --accent: #7aa2f7;
+        --green: #7ee787;
+        --red: #ff7b72;
+        --amber: #e3b341;
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font: 14px/1.55 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+        display: flex;
+        flex-direction: column;
+      }
+      /* Context meter: a slim strip above the header that fills as the
+         transcript approaches the context budget. */
+      .context-bar {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        height: 28px;
+        padding: 0 16px;
+        border-bottom: 1px solid var(--line);
+        background:
+          radial-gradient(120% 200% at 0% 0%, rgba(122, 162, 247, 0.1), transparent 62%),
+          linear-gradient(180deg, #121821, #0d1117);
+        font: 11px/1 ui-monospace, "Cascadia Code", monospace;
+        color: var(--muted);
+        user-select: none;
+      }
+      .context-label {
+        flex: none;
+        font-size: 10px;
+        letter-spacing: 0.14em;
+        text-transform: uppercase;
+        opacity: 0.8;
+      }
+      .context-track {
+        position: relative;
+        flex: 1;
+        height: 6px;
+        border-radius: 999px;
+        background: #0a0e13;
+        box-shadow: inset 0 0 0 1px var(--line), inset 0 1px 2px rgba(0, 0, 0, 0.6);
+        overflow: hidden;
+      }
+      .context-fill {
+        position: relative;
+        height: 100%;
+        width: 0;
+        overflow: hidden;
+        border-radius: inherit;
+        background: linear-gradient(90deg, #6f9cf7, #9d7cd8 60%, #7ee787);
+        box-shadow: 0 0 10px rgba(122, 162, 247, 0.55);
+        transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1), background 0.4s, box-shadow 0.4s;
+      }
+      /* A slow sheen so the meter reads as live even while the numbers sit still. */
+      .context-fill::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(100deg, transparent 20%, rgba(255, 255, 255, 0.32) 50%, transparent 80%);
+        transform: translateX(-100%);
+        animation: sheen 4.5s ease-in-out infinite;
+      }
+      @keyframes sheen {
+        0%, 55% { transform: translateX(-100%); }
+        100% { transform: translateX(100%); }
+      }
+      .context-value {
+        flex: none;
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+      }
+      /* Lifetime tokens: one counter shared by every session ever run. */
+      .context-lifetime {
+        flex: none;
+        padding-left: 12px;
+        border-left: 1px solid var(--line);
+        font-variant-numeric: tabular-nums;
+        color: var(--muted);
+        opacity: 0.85;
+        transition: color 0.3s;
+      }
+      .context-lifetime.bumped { color: var(--green); }
+      .context-bar.warn .context-fill { background: linear-gradient(90deg, #e3b341, #f0883e); box-shadow: 0 0 10px rgba(227, 179, 65, 0.5); }
+      .context-bar.warn .context-value { color: var(--amber); }
+      .context-bar.hot .context-fill { background: linear-gradient(90deg, #f0883e, #ff7b72); box-shadow: 0 0 12px rgba(255, 123, 114, 0.55); }
+      .context-bar.hot .context-value { color: var(--red); }
+      @media (prefers-reduced-motion: reduce) {
+        .context-fill::after { animation: none; }
+        .context-fill { transition: none; }
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 10px 16px;
+        border-bottom: 1px solid var(--line);
+        background: var(--panel);
+      }
+      .brand { font-weight: 650; letter-spacing: 0.3px; }
+      .badge {
+        font: 11px/1 ui-monospace, "Cascadia Code", monospace;
+        color: var(--muted);
+        border: 1px solid var(--line);
+        border-radius: 999px;
+        padding: 4px 8px;
+      }
+      .repo-badge { background: transparent; cursor: pointer; border-color: var(--line); }
+      .repo-badge:hover { border-color: var(--accent); color: var(--text); }
+      .workspace {
+        flex: 1;
+        min-width: 0;
+        /* Room for the folder icon painted below, so text never sits on it. */
+        padding: 4px 6px 4px 24px;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        background-color: transparent;
+        /* A folder glyph, inlined so the bundle stays a single file. */
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b98a5' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 4.25c0-.83.67-1.5 1.5-1.5h2.28c.4 0 .78.16 1.06.44l.72.72h5.44c.83 0 1.5.67 1.5 1.5v6.34c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5z'/%3E%3C/svg%3E");
+        background-repeat: no-repeat;
+        background-position: 6px center;
+        background-size: 14px 14px;
+        text-align: left;
+        color: var(--muted);
+        font: 12px/1.2 ui-monospace, "Cascadia Code", monospace;
+      }
+      /* Editable in place: it reads as bar text until hovered or focused. */
+      .workspace:hover { border-color: var(--line); }
+      .workspace:focus {
+        outline: none;
+        color: var(--text);
+        border-color: var(--accent);
+        background-color: var(--bg);
+        /* The glyph follows the text from muted to bright while editing. */
+        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23e6edf3' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 4.25c0-.83.67-1.5 1.5-1.5h2.28c.4 0 .78.16 1.06.44l.72.72h5.44c.83 0 1.5.67 1.5 1.5v6.34c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5z'/%3E%3C/svg%3E");
+      }
+      .workspace::placeholder { color: var(--muted); opacity: 0.7; }
+      button {
+        font: inherit;
+        color: var(--text);
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 6px 11px;
+        cursor: pointer;
+      }
+      button:hover:not(:disabled) { border-color: var(--accent); }
+      button:disabled { opacity: 0.45; cursor: default; }
+      button.primary { background: var(--accent); border-color: var(--accent); color: #0b1020; font-weight: 600; }
+      button.danger { color: var(--red); }
+      .mode {
+        display: inline-flex;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        overflow: hidden;
+        flex: none;
+      }
+      .mode button {
+        border: 0;
+        border-radius: 0;
+        background: transparent;
+        color: var(--muted);
+        padding: 5px 10px;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      .mode button + button { border-left: 1px solid var(--line); }
+      .mode button:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+      .mode button.active { background: var(--green); color: #0b1020; }
+      .mode button#mode-edit.active { background: var(--accent); }
+      .mode button#ask-ask.active { background: var(--accent); }
+      .shell { flex: 1; min-height: 0; display: flex; }
+      .main { flex: 1; min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+      .sidebar {
+        flex: none;
+        width: 232px;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+        background: var(--panel);
+        border-right: 1px solid var(--line);
+      }
+      .sidebar-head {
+        flex: none;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 10px 12px;
+        border-bottom: 1px solid var(--line);
+      }
+      .sidebar-head .brand { flex: 1; }
+      .sidebar-head button { width: 28px; height: 28px; padding: 0; font-size: 17px; line-height: 1; }
+      .chat-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
+      /* Search results take the rail over while a query is active. */
+      .search-results { display: flex; flex-direction: column; gap: 3px; padding: 8px; overflow-y: auto; flex: 1; }
+      .search-status { color: var(--muted); font-size: 11px; padding: 2px 4px 6px; line-height: 1.4; }
+      .search-hit {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+        width: 100%;
+        text-align: left;
+        padding: 6px 8px;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        background: transparent;
+        color: var(--text);
+        cursor: pointer;
+      }
+      .search-hit:hover, .search-hit:focus-visible { border-color: var(--line); background: var(--panel-2); }
+      .search-hit .hit-head { display: flex; gap: 6px; align-items: baseline; font-size: 11px; color: var(--muted); }
+      .search-hit .hit-chat { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+      .search-hit .hit-role { flex: none; text-transform: uppercase; letter-spacing: 0.04em; font-size: 9.5px; opacity: 0.8; }
+      .search-hit .hit-snippet {
+        font: 11.5px/1.45 ui-monospace, "Cascadia Code", monospace;
+        color: var(--muted);
+        display: -webkit-box;
+        -webkit-line-clamp: 3;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+      }
+      .search-hit mark { background: rgba(255, 196, 0, 0.25); color: var(--text); border-radius: 2px; }
+      .flash { animation: flash-hit 1.6s ease-out; }
+      @keyframes flash-hit { from { background: rgba(255, 196, 0, 0.22); } to { background: transparent; } }
+      .chat-row { display: flex; align-items: stretch; gap: 2px; }
+      .chat-row .chat-item { flex: 1; min-width: 0; }
+      .chat-delete {
+        flex: none;
+        width: 24px;
+        padding: 0;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        color: var(--muted);
+        font-size: 15px;
+        line-height: 1;
+        opacity: 0.45;
+      }
+      .chat-row:hover .chat-delete, .chat-delete:focus-visible { opacity: 1; }
+      .chat-delete:hover:not(:disabled) { border-color: var(--line); background: var(--panel-2); color: #e5534b; }
+      .chat-item {
+        width: 100%;
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: 2px;
+        text-align: left;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 8px;
+        padding: 7px 9px;
+        color: var(--muted);
+      }
+      .chat-item:hover:not(:disabled) { background: var(--panel-2); border-color: var(--line); color: var(--text); }
+      .chat-item.active { background: var(--panel-2); border-color: var(--accent); color: var(--text); }
+      .chat-head { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; }
+      .chat-title { flex: 1; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12.5px; }
+      .chat-meta { font: 10.5px/1.3 ui-monospace, "Cascadia Code", monospace; opacity: 0.75; }
+      /* Work status on every chat: hollow = idle, green pulse = working, amber = blocked on you. */
+      .chat-status {
+        flex: none;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        border: 1px solid var(--muted);
+        background: transparent;
+        opacity: 0.55;
+      }
+      .chat-status.working {
+        border-color: var(--green);
+        background: var(--green);
+        opacity: 1;
+        animation: chat-pulse 1.4s ease-in-out infinite;
+      }
+      .chat-status.approval { border-color: var(--amber); background: var(--amber); opacity: 1; }
+      @keyframes chat-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+      @media (prefers-reduced-motion: reduce) { .chat-status.working { animation: none; } }
+      .chat-empty { color: var(--muted); font-size: 12px; padding: 8px 9px; line-height: 1.5; }
+      @media (max-width: 820px) { .sidebar { width: 190px; } }
+      main {
+        flex: 1;
+        overflow-y: auto;
+        padding: 22px 16px 8px;
+        scroll-behavior: smooth;
+      }
+      .wrap { max-width: 860px; margin: 0 auto; display: flex; flex-direction: column; gap: 12px; }
+      .user {
+        align-self: flex-end;
+        max-width: 78%;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 12px 12px 3px 12px;
+        padding: 9px 13px;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .assistant {
+        white-space: pre-wrap;
+        word-break: break-word;
+        padding: 2px 2px 2px 12px;
+        border-left: 2px solid var(--accent);
+      }
+      .tool {
+        border: 1px solid var(--line);
+        border-left: 3px solid var(--accent);
+        border-radius: 8px;
+        background: var(--panel);
+        overflow: hidden;
+      }
+      .tool.error { border-left-color: var(--red); }
+      .tool-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 7px 11px;
+        font: 12px/1.4 ui-monospace, "Cascadia Code", monospace;
+        color: var(--muted);
+      }
+      .tool-head .name { color: var(--accent); font-weight: 600; }
+      .tool.error .tool-head .name { color: var(--red); }
+      .tool-head .args { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .dot {
+        width: 7px; height: 7px; border-radius: 50%;
+        background: var(--amber);
+        animation: pulse 1s ease-in-out infinite;
+        flex: none;
+      }
+      .tool.done .dot { background: var(--green); animation: none; }
+      .tool.error .dot { background: var(--red); animation: none; }
+      @keyframes pulse { 50% { opacity: 0.25; } }
+      pre.out {
+        margin: 0;
+        padding: 9px 12px;
+        border-top: 1px solid var(--line);
+        background: #0b0f14;
+        color: var(--muted);
+        font: 12px/1.5 ui-monospace, "Cascadia Code", monospace;
+        max-height: 260px;
+        overflow: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      pre.out:empty { display: none; }
+      .notice {
+        font-size: 12.5px;
+        color: var(--muted);
+        padding-left: 12px;
+        border-left: 2px solid var(--line);
+      }
+      .notice.error { color: var(--red); border-left-color: var(--red); }
+      .approval {
+        border: 1px solid var(--amber);
+        border-radius: 8px;
+        background: #1d1a10;
+        padding: 11px 13px;
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+      .approval .title { color: var(--amber); font-weight: 600; font-size: 12.5px; }
+      .approval code {
+        font: 12px/1.5 ui-monospace, "Cascadia Code", monospace;
+        background: #0b0f14;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 6px 8px;
+        display: block;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .approval .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+      .approval.question { border-color: var(--accent); background: #101823; }
+      .approval.question .title { color: var(--accent); }
+      .approval .question-text { font-size: 13px; line-height: 1.5; white-space: pre-wrap; }
+      .approval .row input {
+        flex: 1 1 220px;
+        min-width: 160px;
+        background: #0b0f14;
+        color: inherit;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 6px 9px;
+        font: inherit;
+      }
+      .decision { font-size: 12px; color: var(--muted); }
+      footer {
+        border-top: 1px solid var(--line);
+        background: var(--panel);
+        padding: 12px 16px 14px;
+      }
+      footer.drop-active { outline: 2px dashed var(--accent); outline-offset: -5px; }
+      .composer { max-width: 860px; margin: 0 auto; display: flex; gap: 9px; align-items: flex-end; }
+      textarea {
+        flex: 1;
+        resize: none;
+        min-height: 46px;
+        max-height: 190px;
+        padding: 11px 12px;
+        border-radius: 9px;
+        border: 1px solid var(--line);
+        background: #0b0f14;
+        color: var(--text);
+        font: inherit;
+      }
+      textarea:focus { outline: none; border-color: var(--accent); }
+      .hint { max-width: 860px; margin: 7px auto 0; color: var(--muted); font-size: 11.5px; display: flex; justify-content: space-between; gap: 12px; }
+      .composer button.attach {
+        width: 42px;
+        height: 46px;
+        padding: 0;
+        flex: none;
+        color: var(--muted);
+        font-size: 21px;
+        line-height: 1;
+      }
+      .composer button.attach:hover:not(:disabled) { color: var(--text); }
+      .composer button.attach svg { display: block; margin: 0 auto; }
+      .staged {
+        max-width: 860px;
+        margin: 0 auto 8px;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .staged[hidden] { display: none; }
+      .chip {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        max-width: 260px;
+        padding: 4px 5px 4px 7px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: var(--panel-2);
+        font-size: 12px;
+      }
+      .chip img {
+        width: 28px;
+        height: 28px;
+        object-fit: cover;
+        border-radius: 5px;
+        flex: none;
+      }
+      .chip .chip-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .chip .chip-size { color: var(--muted); font-size: 11px; flex: none; }
+      .chip button {
+        border: 0;
+        background: transparent;
+        color: var(--muted);
+        padding: 2px 5px;
+        font-size: 15px;
+        line-height: 1;
+      }
+      .chip button:hover:not(:disabled) { color: var(--red); background: transparent; }
+      .drop-hint {
+        max-width: 860px;
+        margin: 0 auto 8px;
+        padding: 8px 10px;
+        border: 1px dashed var(--accent);
+        border-radius: 8px;
+        color: var(--accent);
+        font-size: 12px;
+        text-align: center;
+      }
+      .user.steer { border-color: var(--accent); background: transparent; }
+      .steer-tag {
+        display: inline-block;
+        margin-bottom: 5px;
+        padding: 1px 6px;
+        border: 1px solid var(--accent);
+        border-radius: 999px;
+        color: var(--accent);
+        font: 10px/1.6 ui-monospace, "Cascadia Code", monospace;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+      }
+      .user .files { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+      .user .files img { max-width: 180px; max-height: 130px; border-radius: 8px; display: block; }
+      .user .file-chip {
+        font: 11.5px/1.4 ui-monospace, "Cascadia Code", monospace;
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 4px 8px;
+        color: var(--muted);
+      }
+      .status { display: inline-flex; align-items: center; gap: 6px; }
+      .status .dot { animation: none; background: var(--green); }
+      .status.busy .dot { background: var(--amber); animation: pulse 1s ease-in-out infinite; }
+      dialog {
+        background: var(--panel);
+        color: var(--text);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        padding: 0;
+        width: min(520px, 92vw);
+      }
+      .repo-status { margin: 0 0 8px; color: var(--muted); font-size: 12.5px; }
+      .repo-row { display: flex; align-items: center; gap: 6px; }
+      .repo-row input { flex: 1; min-width: 0; }
+      .repo-row button { flex: none; }
+      .repo-hint { margin: 6px 0 0; color: var(--muted); font-size: 11.5px; }
+      .repo-hint.error { color: var(--red); }
+      .repo-list { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 6px; max-height: 170px; overflow-y: auto; }
+      .repo-empty { color: var(--muted); font-size: 12px; }
+      .repo-item { display: flex; align-items: center; gap: 8px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 7px; }
+      .repo-item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 12px/1.3 ui-monospace, "Cascadia Code", monospace; }
+      .repo-item .meta { flex: none; color: var(--muted); font-size: 10.5px; }
+      .repo-item button { flex: none; padding: 3px 8px; font-size: 11.5px; }
+      dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+      dialog form { padding: 18px; display: flex; flex-direction: column; gap: 12px; }
+      dialog h2 { margin: 0; font-size: 15px; }
+      dialog label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--muted); }
+      dialog label.check { flex-direction: row; align-items: center; gap: 8px; }
+      dialog label.check input { width: 15px; height: 15px; padding: 0; }
+      dialog p.dialog-hint { margin: -4px 0 0; color: var(--muted); font-size: 11.5px; line-height: 1.45; }
+      dialog input {
+        font: 13px/1.4 ui-monospace, "Cascadia Code", monospace;
+        color: var(--text);
+        background: #0b0f14;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 8px 10px;
+      }
+      dialog .row { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+      dialog p { margin: 0; font-size: 12px; color: var(--muted); }
+      dialog p.required { color: var(--amber); }
+      dialog a { color: var(--accent); }
+      .onboarding {
+        position: fixed;
+        inset: 0;
+        z-index: 50;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 20px;
+        background: rgba(5, 8, 12, 0.82);
+        backdrop-filter: blur(6px);
+      }
+      .onboarding[hidden] { display: none; }
+      .onboarding-card {
+        width: min(560px, 94vw);
+        max-height: 90vh;
+        overflow-y: auto;
+        background: var(--panel);
+        border: 1px solid var(--line);
+        border-radius: 14px;
+        padding: 22px 22px 18px;
+        box-shadow: 0 18px 60px rgba(0, 0, 0, 0.5);
+      }
+      .onboarding-card h1 { margin: 0 0 4px; font-size: 19px; }
+      .onboarding-card .sub { margin: 0 0 14px; color: var(--muted); font-size: 13px; }
+      .onboarding-steps { margin: 0 0 12px; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+      .onboarding-steps li {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        background: var(--panel-2);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 10px 12px;
+        font-size: 13px;
+      }
+      .onboarding-steps .n {
+        flex: none;
+        width: 22px; height: 22px;
+        border-radius: 50%;
+        background: var(--accent);
+        color: #0b1020;
+        font-weight: 700;
+        font-size: 12px;
+        display: flex; align-items: center; justify-content: center;
+      }
+      .onboarding-steps a { color: var(--accent); }
+      .onboarding-steps code {
+        font: 12px/1.4 ui-monospace, "Cascadia Code", monospace;
+        background: #0b0f14;
+        border: 1px solid var(--line);
+        border-radius: 5px;
+        padding: 1px 5px;
+      }
+      .onboarding-row { display: flex; gap: 8px; margin-top: 10px; }
+      .onboarding-row input {
+        flex: 1;
+        font: 13px/1.4 ui-monospace, "Cascadia Code", monospace;
+        color: var(--text);
+        background: #0b0f14;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        padding: 9px 10px;
+      }
+      .onboarding-error { color: var(--red); font-size: 12.5px; min-height: 18px; margin: 8px 0 0; }
+      .onboarding-alt { margin: 10px 0 0; color: var(--muted); font-size: 12px; }
+      .onboarding-alt code { font: 11.5px/1.4 ui-monospace, "Cascadia Code", monospace; }
+    </style>
+  </head>
+  <body>
+    <div class="context-bar" id="context-bar" title="Estimated context window use">
+      <span class="context-label">Context</span>
+      <div class="context-track" id="context-track" role="progressbar" aria-label="Context window used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+        <div class="context-fill" id="context-fill"></div>
+      </div>
+      <span class="context-value" id="context-turn" title="Current turn working time">idle</span>
+      <span class="context-value" id="context-value">connecting…</span>
+      <span class="context-lifetime" id="context-lifetime" title="Tokens used across every session, ever">0 lifetime</span>
+      <span class="context-lifetime" id="context-time" title="Working time across every session, ever">0 working</span>
+    </div>
+
+    <div class="shell">
+      <aside class="sidebar">
+        <div class="sidebar-head">
+          <span class="brand">Vaelen</span>
+          <input id="chat-search" type="search" placeholder="Search chats…" aria-label="Search chats" style="flex:1;min-width:0;margin:0 4px;" />
+          <button id="chat-recover" type="button" title="Recover the last deleted chat" aria-label="Recover the last deleted chat" disabled>↺</button>
+          <button id="new-chat" type="button" title="Start a new chat" aria-label="Start a new chat">+</button>
+        </div>
+        <nav class="chat-list" id="chat-list" aria-label="Saved chats"></nav>
+        <div class="search-results" id="search-results" aria-live="polite" hidden></div>
+      </aside>
+
+      <div class="main">
+        <header>
+          <span class="badge" id="model">connecting…</span>
+          <button class="badge repo-badge" id="repo-badge" type="button" title="GitHub repository — click to change" hidden></button>
+          <input class="workspace" id="workspace-input" type="text" spellcheck="false" autocomplete="off"
+            placeholder="Project folder" aria-label="Project folder for this chat"
+            title="Project folder for this chat — type a path and press Enter. Other chats keep their own folder." />
+          <div class="mode" role="group" aria-label="Access mode">
+            <button id="mode-read" type="button" aria-pressed="false" title="Inspect only — blocks edits and mutating commands">Read</button>
+            <button id="mode-edit" type="button" class="active" aria-pressed="true" title="Allow edits and commands that change the project">Edit</button>
+          </div>
+          <div class="mode" role="group" aria-label="Question mode">
+            <button id="ask-auto" type="button" aria-pressed="false" title="No questions — Vaelen proceeds with its best guess">Auto</button>
+            <button id="ask-ask" type="button" class="active" aria-pressed="true" title="Ask — Vaelen may ask high-level clarifying questions">Ask</button>
+          </div>
+          <button id="undo" type="button" title="Restore files from the last turn">Undo</button>
+          <button id="settings" type="button">Settings</button>
+        </header>
+
+        <main id="scroll">
+          <div class="wrap" id="log"></div>
+        </main>
+
+        <footer>
+      <div class="drop-hint" id="drop-hint" hidden>Drop files or a folder to attach images and text</div>
+      <div class="staged" id="staged" hidden></div>
+      <form class="composer" id="composer">
+        <button class="attach" id="attach" type="button" title="Attach images or text files" aria-label="Attach files">+</button>
+        <button class="attach" id="screenshot" type="button" title="Take a screenshot of a screen or window" aria-label="Take a screenshot">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 8h3l1.5-2h7L17 8h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1Z" />
+            <circle cx="12" cy="13" r="3.2" />
+          </svg>
+        </button>
+        <input id="file-input" type="file" multiple hidden />
+        <textarea id="input" rows="1" placeholder="Ask Vaelen to change something in this project…"></textarea>
+        <button class="primary" id="send" type="submit">Send</button>
+        <button id="stop" type="button" hidden>Stop</button>
+      </form>
+      <div class="hint">
+        <span>Enter to send · Shift+Enter for a new line · Enter also steers while the agent works · Paste, drop, or capture a screenshot</span>
+        <span class="status" id="status"><span class="dot"></span><span id="status-label">idle</span></span>
+      </div>
+    </footer>
+      </div>
+    </div>
+
+    <div class="onboarding" id="onboarding" hidden>
+      <div class="onboarding-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
+        <h1 id="onboarding-title">Welcome to Vaelen — connect DeepSeek</h1>
+        <p class="sub">Paste one API key and it is saved to <code>~/.vaelen/config.json</code> for every future session. Takes about a minute.</p>
+        <ol class="onboarding-steps">
+          <li><span class="n">1</span><span>Create an account at <a href="https://platform.deepseek.com/sign_up" target="_blank" rel="noreferrer">platform.deepseek.com →</a> (or <a href="https://platform.deepseek.com" target="_blank" rel="noreferrer">log in →</a>).</span></li>
+          <li><span class="n">2</span><span>Open <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">API keys →</a>, press <strong>Create new API key</strong>, copy the <code>sk-…</code> value.</span></li>
+          <li><span class="n">3</span><span>Paste it below and press <strong>Connect</strong>. New keys can take ~30s to activate — if the first turn says invalid key, wait and retry.</span></li>
+        </ol>
+        <div class="onboarding-row">
+          <input id="onboarding-key" type="password" placeholder="sk-…" autocomplete="off" aria-label="DeepSeek API key" />
+          <button type="button" id="onboarding-connect" class="primary">Connect</button>
+        </div>
+        <p class="onboarding-error" id="onboarding-error"></p>
+        <p class="onboarding-alt">No key? Run a local model instead: <code>--base-url http://127.0.0.1:11434/v1 --api-key ollama --model qwen2.5-coder:32b</code>. You can also <button type="button" id="onboarding-settings">open Settings</button> to change endpoint/model.</p>
+      </div>
+    </div>
+
+    <dialog id="settings-panel">
+      <form method="dialog" id="settings-form">
+        <h2>Repository</h2>
+        <p class="repo-status" id="repo-status">No repository — working in the local folder below.</p>
+        <div class="repo-row">
+          <input id="repo-input" placeholder="owner/repo or GitHub URL" autocomplete="off" spellcheck="false" />
+          <button type="button" id="repo-open" class="primary">Open</button>
+          <button type="button" id="repo-close" hidden>Close</button>
+        </div>
+        <p class="repo-hint" id="repo-hint"></p>
+        <div class="repo-list" id="repo-history"></div>
+        <div class="repo-row">
+          <button type="button" id="repo-mine-load">Load my GitHub repositories</button>
+        </div>
+        <div class="repo-list" id="repo-mine"></div>
+
+        <h2>Connection</h2>
+        <p id="key-hint">Defaults to DeepSeek (deepseek-flash). Saving stores the connection in <code>~/.vaelen/config.json</code>, so every new session reconnects automatically. Leave the key blank to keep the current one.</p>
+        <p id="key-required" class="required" hidden>
+          <strong>No API key yet.</strong> Paste one below to start — it is saved for every future session.
+          <a href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">Get a DeepSeek key →</a>
+        </p>
+        <label>Base URL<input id="base-url" placeholder="https://api.deepseek.com" /></label>
+        <label>Model<input id="model-input" placeholder="deepseek-flash" /></label>
+        <label>Context budget (tokens)<input id="context-budget" type="number" min="1000" step="1000" placeholder="800000" /></label>
+        <label>Steps per turn<input id="max-steps" type="number" min="1" max="100000" step="10" placeholder="100" /></label>
+        <label class="check"><input id="max-steps-unlimited" type="checkbox" /> No step limit — keep working until the turn is done</label>
+        <p class="dialog-hint">Each step is one tool round-trip. A turn that hits the limit stops with a note; with no limit it runs until it finishes or you press Stop.</p>
+        <label class="check"><input id="verify-toggle" type="checkbox" /> Run project checks after edits</label>
+        <label>API key<input id="api-key" type="password" placeholder="sk-…" autocomplete="off" /></label>
+        <label>OpenCode key (free DeepSeek)<input id="opencode-key" type="password" placeholder="opencode-… (free deepseek-v4.1-flash-free)" autocomplete="off" /></label>
+        <p class="dialog-hint">No DeepSeek key? Paste an OpenCode key above and set Model to <code>deepseek-v4.1-flash-free</code> — new chats use OpenCode's free quota. Sign in at <a href="https://opencode.ai" target="_blank" rel="noreferrer">opencode.ai</a> to get one.</p>
+        <div class="row">
+          <button value="cancel" type="button" id="settings-cancel">Cancel</button>
+          <button value="save" type="submit" class="primary" id="settings-save">Save</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script>
+      const token = new URLSearchParams(location.search).get('token') || '';
+      // The key lives in the server's config file only. Older builds mirrored it
+      // into localStorage under vaelen.apiKey; clean that up once.
+      try {
+        localStorage.removeItem('vaelen.apiKey');
+      } catch {
+        // Storage can be unavailable; nothing to clean up then.
+      }
+      const log = document.getElementById('log');
+      const scroller = document.getElementById('scroll');
+      const input = document.getElementById('input');
+      const sendButton = document.getElementById('send');
+      const stopButton = document.getElementById('stop');
+      const status = document.getElementById('status');
+      const statusLabel = document.getElementById('status-label');
+      const modelBadge = document.getElementById('model');
+      const workspaceInput = document.getElementById('workspace-input');
+      const settingsPanel = document.getElementById('settings-panel');
+      const modeRead = document.getElementById('mode-read');
+      const modeEdit = document.getElementById('mode-edit');
+      const askAuto = document.getElementById('ask-auto');
+      const askAsk = document.getElementById('ask-ask');
+      const stagedEl = document.getElementById('staged');
+      const attachButton = document.getElementById('attach');
+      const screenshotButton = document.getElementById('screenshot');
+      const chatList = document.getElementById('chat-list');
+      const newChatButton = document.getElementById('new-chat');
+      const recoverButton = document.getElementById('chat-recover');
+      const undoButton = document.getElementById('undo');
+      const verifyToggle = document.getElementById('verify-toggle');
+      const maxStepsInput = document.getElementById('max-steps');
+      const maxStepsUnlimited = document.getElementById('max-steps-unlimited');
+      const fileInput = document.getElementById('file-input');
+      const dropHint = document.getElementById('drop-hint');
+      const footerEl = document.querySelector('footer');
+      const contextBar = document.getElementById('context-bar');
+      const contextTrack = document.getElementById('context-track');
+      const contextFill = document.getElementById('context-fill');
+      const contextValue = document.getElementById('context-value');
+      const contextLifetime = document.getElementById('context-lifetime');
+
+      const MAX_FILES = 6;
+      const MAX_IMAGE_BYTES = 8_000_000;
+      const MAX_TEXT_CHARS = 1_000_000;
+      const MAX_TOTAL_BYTES = 12_000_000;
+      const LONG_PASTE_CHARS = 8000;
+      /** Longest side kept for a captured screen; bigger PNGs can pass 8 MB. */
+      const MAX_CAPTURE_SIDE = 2560;
+      const SCREENSHOT_TITLE = 'Take a screenshot of a screen or window';
+      const TEXT_FILE = /\.(txt|md|markdown|json|jsonc|csv|tsv|log|yml|yaml|toml|ini|cfg|xml|html|css|scss|js|jsx|mjs|cjs|ts|tsx|py|rs|go|java|kt|c|h|cpp|hpp|cs|rb|php|sh|bash|zsh|ps1|sql|graphql|env|pdf)$/i;
+
+      let assistantBlock = null;
+      let activeTool = null;
+      let busy = false;
+      let composing = false;
+      let currentWorkspace = '';
+      /** Open repository, or null for "no repository" (plain local folder). */
+      let currentRepo = null;
+      let repoHistory = [];
+      let currentModel = '';
+      let currentBaseUrl = '';
+      let currentBudget = 0;
+      let currentWindow = 0;
+      let currentLifetime = null;
+      let currentLedger = '';
+      let lifetimeBump = 0;
+      let currentChatId = null;
+      let currentChats = [];
+      let verifyEnabled = true;
+      let askEnabled = false;
+      /** Tool round-trips allowed per turn; 0 means the turn is not capped. */
+      let currentMaxSteps = 100;
+      /** The request id of a send that started before its chat had a file id. */
+      let pendingSendId = null;
+      /** Approval cards already drawn for the visible chat. */
+      let renderedApprovals = new Set();
+      let renderedQuestions = new Set();
+      /** Deleted chats waiting in the trash; the ↺ button is enabled while > 0. */
+      let recoverable = 0;
+      let staged = [];
+      let capturing = false;
+
+      async function post(path, body) {
+        return fetch(path, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-vaelen-token': token },
+          body: JSON.stringify(body || {}),
+        });
+      }
+
+      async function getJson(path) {
+        const response = await fetch(path, { headers: { 'x-vaelen-token': token } });
+        const body = await response.json().catch(() => ({}));
+        return { response, body };
+      }
+
+      /**
+       * True while the window is pinned to the newest output. Only a real scroll
+       * changes it: content growing below the fold must not count as scrolling
+       * away, or one large chunk would stop the follow mid-turn.
+       */
+      let follow = true;
+
+      function atBottom() {
+        return scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 24;
+      }
+
+      /** Follows new output unless the reader scrolled up; force re-pins to the bottom. */
+      function scrollDown(force) {
+        if (force) follow = true;
+        else if (!follow) return;
+        // Smooth scrolling animates and restarts on every chunk, so a fast stream
+        // outruns it; jump instantly and let the CSS keep smoothing manual scrolls.
+        scroller.scrollTo({ top: scroller.scrollHeight, behavior: 'instant' });
+      }
+
+      // A jump of our own lands on the bottom and keeps following; a real scroll
+      // up stops the follow, and scrolling back down starts it again.
+      scroller.addEventListener(
+        'scroll',
+        () => {
+          follow = atBottom();
+        },
+        { passive: true },
+      );
+
+      function add(kind, text) {
+        const node = document.createElement('div');
+        node.className = kind;
+        if (text !== undefined) node.textContent = text;
+        log.appendChild(node);
+        scrollDown(false);
+        return node;
+      }
+
+      function addNotice(text, kind) {
+        assistantBlock = null;
+        activeTool = null;
+        const node = add('notice' + (kind === 'error' ? ' error' : ''));
+        node.textContent = text;
+        scrollDown(true);
+      }
+
+      function addUser(text, attachments = [], steer = false) {
+        assistantBlock = null;
+        activeTool = null;
+        const node = add('user');
+        if (steer) {
+          node.classList.add('steer');
+          const tag = document.createElement('span');
+          tag.className = 'steer-tag';
+          tag.textContent = 'steering';
+          tag.title = 'Sent while the agent was working; applied at its next step';
+          node.append(tag);
+        }
+        if (text) {
+          const body = document.createElement('div');
+          body.textContent = text;
+          node.append(body);
+        }
+        if (attachments.length > 0) {
+          const files = document.createElement('div');
+          files.className = 'files';
+          for (const attachment of attachments) {
+            if (attachment.kind === 'image') {
+              const image = document.createElement('img');
+              image.src = '/api/attachment/' + encodeURIComponent(attachment.id) + '?token=' + encodeURIComponent(token);
+              image.alt = attachment.name || 'Attached image';
+              image.title = attachment.name || '';
+              files.append(image);
+            } else {
+              const chip = document.createElement('span');
+              chip.className = 'file-chip';
+              chip.textContent = attachment.name || 'attachment';
+              files.append(chip);
+            }
+          }
+          node.append(files);
+        }
+        scrollDown(true);
+        return node;
+      }
+
+      function formatDuration(ms) {
+        const s = Math.max(0, Math.floor((ms || 0) / 1000));
+        const h = Math.floor(s / 3600);
+        const m = Math.floor((s % 3600) / 60);
+        const sec = s % 60;
+        if (h > 0) return `${h}h ${m}m`;
+        if (m > 0) return `${m}m ${String(sec).padStart(2, '0')}s`;
+        return `${sec}s`;
+      }
+
+      function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+      }
+
+      function localId() {
+        if (crypto.randomUUID) return crypto.randomUUID();
+        return 'local-' + Date.now() + '-' + Math.random().toString(16).slice(2);
+      }
+
+      function totalStagedBytes() {
+        return staged.reduce((sum, item) => sum + item.size, 0);
+      }
+
+      function imageMime(file) {
+        const type = (file.type || '').toLowerCase();
+        if (['image/png', 'image/jpeg', 'image/webp', 'image/gif'].includes(type)) return type;
+        const name = (file.name || '').toLowerCase();
+        if (name.endsWith('.png')) return 'image/png';
+        if (name.endsWith('.jpg') || name.endsWith('.jpeg')) return 'image/jpeg';
+        if (name.endsWith('.webp')) return 'image/webp';
+        if (name.endsWith('.gif')) return 'image/gif';
+        return '';
+      }
+
+      function readDataUrl(file) {
+        return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(String(reader.result));
+          reader.onerror = () => reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+      }
+
+      function renderStaged() {
+        stagedEl.textContent = '';
+        stagedEl.hidden = staged.length === 0;
+        attachButton.disabled = staged.length >= MAX_FILES;
+        screenshotButton.disabled = staged.length >= MAX_FILES || capturing;
+
+        for (const item of staged) {
+          const chip = document.createElement('div');
+          chip.className = 'chip';
+
+          if (item.kind === 'image') {
+            const preview = document.createElement('img');
+            preview.src = item.dataUrl;
+            preview.alt = item.name;
+            chip.append(preview);
+          }
+
+          const name = document.createElement('span');
+          name.className = 'chip-name';
+          name.textContent = item.name;
+          name.title = item.name;
+
+          const size = document.createElement('span');
+          size.className = 'chip-size';
+          size.textContent = formatSize(item.size);
+
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.textContent = '×';
+          remove.title = 'Remove ' + item.name;
+          remove.setAttribute('aria-label', 'Remove ' + item.name);
+          remove.addEventListener('click', () => {
+            staged = staged.filter((candidate) => candidate.id !== item.id);
+            renderStaged();
+            updateSendState();
+            input.focus();
+          });
+
+          chip.append(name, size, remove);
+          stagedEl.append(chip);
+        }
+
+        updateSendState();
+      }
+
+      /** Directories that would only fill the 6-file limit with build junk. */
+      const SKIP_DIRS = new Set([
+        'node_modules',
+        '.git',
+        '.vaelen',
+        'dist',
+        'build',
+        'out',
+        'target',
+        '.next',
+        '.venv',
+        'venv',
+        '__pycache__',
+      ]);
+      /** How many files a dropped folder is scanned for before giving up. */
+      const MAX_DROP_FILES = 40;
+      const MAX_DROP_DEPTH = 8;
+
+      function readDirectory(reader) {
+        return new Promise((resolve, reject) => reader.readEntries(resolve, reject));
+      }
+
+      function entryFile(entry) {
+        return new Promise((resolve, reject) => entry.file(resolve, reject));
+      }
+
+      /** Depth-first walk of a dropped entry, collecting files in path order. */
+      async function collectEntry(entry, path, files, depth) {
+        if (depth > MAX_DROP_DEPTH || files.length >= MAX_DROP_FILES) return;
+        if (entry.isDirectory) {
+          if (SKIP_DIRS.has(String(entry.name).toLowerCase())) return;
+          const reader = entry.createReader();
+          for (;;) {
+            let batch;
+            try {
+              batch = await readDirectory(reader);
+            } catch {
+              return;
+            }
+            if (!batch || batch.length === 0) return;
+            for (const child of batch) {
+              if (files.length >= MAX_DROP_FILES) return;
+              await collectEntry(child, path + entry.name + '/', files, depth + 1);
+            }
+          }
+        }
+        if (!entry.isFile) return;
+        try {
+          const file = await entryFile(entry);
+          files.push({ file, path: path + (file.name || entry.name) });
+        } catch {
+          // A file that vanished mid-drop is skipped, not fatal.
+        }
+      }
+
+      /**
+       * The + button and the composer accept whole folders: a dropped folder is
+       * walked and its images and text files are staged, up to the usual limits.
+       */
+      async function addDrop(data) {
+        if (staged.length >= MAX_FILES) {
+          addNotice('You can attach at most ' + MAX_FILES + ' files.', 'error');
+          return;
+        }
+
+        const entries = Array.from(data?.items || [])
+          .map((item) => (typeof item.webkitGetAsEntry === 'function' ? item.webkitGetAsEntry() : null))
+          .filter(Boolean);
+        if (entries.length === 0) {
+          await addFiles(data?.files);
+          return;
+        }
+
+        const found = [];
+        for (const entry of entries) await collectEntry(entry, '', found, 0);
+        found.sort((a, b) => a.path.localeCompare(b.path));
+
+        const supported = found.filter(
+          ({ file }) =>
+            imageMime(file) !== '' ||
+            String(file.type || '').startsWith('text/') ||
+            TEXT_FILE.test(file.name || ''),
+        );
+        if (supported.length === 0) {
+          addNotice(
+            entries.some((entry) => entry.isDirectory)
+              ? 'No images or text files were found in that folder.'
+              : 'Only images and text files can be attached.',
+            'error',
+          );
+          return;
+        }
+
+        const room = MAX_FILES - staged.length;
+        const take = supported.slice(0, room);
+        if (supported.length > take.length) {
+          addNotice(
+            `Attached the first ${take.length} of ${supported.length} files from the drop (limit ${MAX_FILES}).`,
+          );
+        } else if (found.length > supported.length) {
+          const skipped = found.length - supported.length;
+          addNotice(`Skipped ${skipped} unsupported file${skipped === 1 ? '' : 's'} from the drop.`);
+        }
+        await addFiles(take.map(({ file }) => file));
+      }
+
+      async function addFiles(fileList) {
+        const files = Array.from(fileList || []);
+        if (files.length === 0) return;
+
+        for (const file of files) {
+          if (staged.length >= MAX_FILES) {
+            addNotice('You can attach at most ' + MAX_FILES + ' files.', 'error');
+            break;
+          }
+
+          const mime = imageMime(file);
+          if (mime) {
+            if (file.size > MAX_IMAGE_BYTES) {
+              addNotice(file.name + ' is too large (max 8 MB).', 'error');
+              continue;
+            }
+            if (totalStagedBytes() + file.size > MAX_TOTAL_BYTES) {
+              addNotice('Attachments exceed the 12 MB limit.', 'error');
+              continue;
+            }
+            let dataUrl;
+            try {
+              dataUrl = await readDataUrl(file);
+            } catch {
+              addNotice('Could not read ' + file.name + '.', 'error');
+              continue;
+            }
+            staged.push({
+              id: localId(),
+              name: file.name || 'Pasted image.png',
+              kind: 'image',
+              mime,
+              size: file.size,
+              dataUrl,
+              data: dataUrl.split(',')[1],
+            });
+            continue;
+          }
+
+          const isPdf = (file.name || '').toLowerCase().endsWith('.pdf') || file.type === 'application/pdf';
+          if (isPdf) {
+            if (file.size > MAX_IMAGE_BYTES) {
+              addNotice(file.name + ' is too large (max 8 MB).', 'error');
+              continue;
+            }
+            if (totalStagedBytes() + file.size > MAX_TOTAL_BYTES) {
+              addNotice('Attachments exceed the 12 MB limit.', 'error');
+              continue;
+            }
+            let dataUrl;
+            try { dataUrl = await readDataUrl(file); }
+            catch { addNotice('Could not read ' + file.name + '.', 'error'); continue; }
+            staged.push({
+              id: localId(),
+              name: file.name || 'attachment.pdf',
+              kind: 'pdf',
+              mime: 'application/pdf',
+              size: file.size,
+              dataUrl,
+              data: dataUrl.split(',')[1],
+            });
+            continue;
+          }
+          const looksText = file.type.startsWith('text/') || TEXT_FILE.test(file.name || '');
+          if (!looksText) {
+            addNotice((file.name || 'That file') + ': only images and text files are supported.', 'error');
+            continue;
+          }
+          if (file.size > MAX_TEXT_CHARS) {
+            addNotice(file.name + ' is too large (max 1 MB).', 'error');
+            continue;
+          }
+          if (totalStagedBytes() + file.size > MAX_TOTAL_BYTES) {
+            addNotice('Attachments exceed the 12 MB limit.', 'error');
+            continue;
+          }
+          let content;
+          try {
+            content = await file.text();
+          } catch {
+            addNotice('Could not read ' + file.name + '.', 'error');
+            continue;
+          }
+          if (content.length > MAX_TEXT_CHARS) {
+            addNotice(file.name + ' is too large (max 1 MB of text).', 'error');
+            continue;
+          }
+          staged.push({
+            id: localId(),
+            name: file.name || 'attachment.txt',
+            kind: 'text',
+            mime: 'text/plain',
+            size: file.size,
+            content,
+          });
+        }
+
+        renderStaged();
+      }
+
+      /**
+       * Grabs one frame from a screen/window the user picks, stages it as a PNG
+       * attachment, and stops sharing immediately. The picker is the browser's
+       * native one; no capture starts until the user chooses a source.
+       */
+      async function captureScreenshot() {
+        if (capturing) return;
+        if (staged.length >= MAX_FILES) {
+          addNotice('You can attach at most ' + MAX_FILES + ' files.', 'error');
+          return;
+        }
+        if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+          addNotice('Screen capture is not available in this window — paste or drop an image instead.', 'error');
+          return;
+        }
+
+        capturing = true;
+        screenshotButton.disabled = true;
+        screenshotButton.title = 'Choose a screen or window to capture…';
+        let stream;
+        try {
+          stream = await navigator.mediaDevices.getDisplayMedia({ video: { frameRate: 2 }, audio: false });
+
+          const video = document.createElement('video');
+          video.srcObject = stream;
+          video.muted = true;
+          video.playsInline = true;
+          await video.play();
+
+          // Wait for a painted frame: some windows hand back a black first frame.
+          await new Promise((resolve) => {
+            if (typeof video.requestVideoFrameCallback === 'function') {
+              video.requestVideoFrameCallback(() => resolve());
+            } else {
+              setTimeout(resolve, 150);
+            }
+          });
+
+          const sourceWidth = video.videoWidth;
+          const sourceHeight = video.videoHeight;
+          if (!sourceWidth || !sourceHeight) throw new Error('the capture came back empty');
+
+          const scale = Math.min(1, MAX_CAPTURE_SIDE / Math.max(sourceWidth, sourceHeight));
+          const width = Math.max(1, Math.round(sourceWidth * scale));
+          const height = Math.max(1, Math.round(sourceHeight * scale));
+          const canvas = document.createElement('canvas');
+          canvas.width = width;
+          canvas.height = height;
+          canvas.getContext('2d').drawImage(video, 0, 0, width, height);
+
+          const blob = await new Promise((resolve, reject) => {
+            canvas.toBlob(
+              (value) => (value ? resolve(value) : reject(new Error('could not encode the screenshot'))),
+              'image/png',
+            );
+          });
+          if (blob.size > MAX_IMAGE_BYTES) {
+            throw new Error('the screenshot is ' + formatSize(blob.size) + ' (max 8 MB)');
+          }
+
+          const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+          const file = new File([blob], 'screenshot-' + stamp + '.png', { type: 'image/png' });
+          const before = staged.length;
+          await addFiles([file]);
+          if (staged.length > before) {
+            addNotice('Screenshot added (' + width + '×' + height + ', ' + formatSize(blob.size) + ').');
+          }
+        } catch (error) {
+          if (error && (error.name === 'NotAllowedError' || error.name === 'AbortError')) {
+            addNotice('Screenshot cancelled.');
+          } else {
+            addNotice('Could not capture the screen: ' + (error?.message || error?.name || error) + '.', 'error');
+          }
+        } finally {
+          for (const track of stream ? stream.getTracks() : []) track.stop();
+          capturing = false;
+          screenshotButton.disabled = staged.length >= MAX_FILES;
+          screenshotButton.title = SCREENSHOT_TITLE;
+        }
+      }
+
+      function addPastedText(text) {
+        if (staged.length >= MAX_FILES) {
+          addNotice('You can attach at most ' + MAX_FILES + ' files.', 'error');
+          return;
+        }
+        if (text.length > MAX_TEXT_CHARS) {
+          addNotice('That paste is too large (max 1 MB of text).', 'error');
+          return;
+        }
+        const size = new Blob([text]).size;
+        if (totalStagedBytes() + size > MAX_TOTAL_BYTES) {
+          addNotice('Attachments exceed the 12 MB limit.', 'error');
+          return;
+        }
+        staged.push({
+          id: localId(),
+          name: 'Pasted text.txt',
+          kind: 'text',
+          mime: 'text/plain',
+          size,
+          content: text,
+        });
+        renderStaged();
+        input.focus();
+      }
+
+      function resizeInput() {
+        input.style.height = 'auto';
+        input.style.height = Math.min(input.scrollHeight, 190) + 'px';
+      }
+
+      function updateSendState() {
+        // Enter works during a turn: it steers instead of starting a new one.
+        sendButton.disabled = input.value.trim() === '' && staged.length === 0;
+        sendButton.textContent = busy ? 'Steer' : 'Send';
+        sendButton.title = busy ? 'Send guidance to the running turn' : '';
+        attachButton.disabled = staged.length >= MAX_FILES;
+        screenshotButton.disabled = staged.length >= MAX_FILES || capturing;
+      }
+
+      function draftKey() {
+        return 'vaelen.draft:' + currentWorkspace;
+      }
+
+      function saveDraft(value) {
+        try {
+          if (value.trim() === '') localStorage.removeItem(draftKey());
+          else localStorage.setItem(draftKey(), value);
+        } catch {
+          // A full or unavailable localStorage must not break the composer.
+        }
+      }
+
+      function restoreDraft() {
+        if (!currentWorkspace) return;
+        try {
+          const value = localStorage.getItem(draftKey());
+          if (value) {
+            input.value = value;
+            resizeInput();
+            updateSendState();
+          }
+        } catch {
+          // Ignore unreadable drafts.
+        }
+      }
+
+      async function send() {
+        const text = input.value.trim();
+        if (text === '' && staged.length === 0) return;
+
+        // While a turn runs, Enter steers it instead of starting another one.
+        if (busy) {
+          if (staged.length > 0) {
+            addNotice('Steering sends text only — remove the attachments or press Stop first.', 'error');
+            return;
+          }
+          const steerResponse = await post('/api/steer', {
+            chatId: currentChatId || '',
+            message: text,
+          }).catch(() => null);
+          if (!steerResponse || !steerResponse.ok) {
+            const body = await steerResponse?.json().catch(() => ({}));
+            addNotice(body?.error || 'Could not send that guidance.', 'error');
+            return;
+          }
+          input.value = '';
+          resizeInput();
+          saveDraft('');
+          updateSendState();
+          return;
+        }
+
+        const attachments = staged.map((item) =>
+          item.kind === 'image'
+            ? { kind: 'image', name: item.name, mime: item.mime, data: item.data }
+            : { kind: 'text', name: item.name, mime: item.mime, content: item.content },
+        );
+
+        const target = currentChatId;
+        const requestId = localId();
+        pendingSendId = requestId;
+        setBusy(true);
+        // Sending is a deliberate jump to the newest message, even after reading back.
+        scrollDown(true);
+        let response;
+        try {
+          response = await post('/api/chat', {
+            chatId: target || '',
+            message: text,
+            attachments,
+            requestId,
+          });
+        } catch {
+          pendingSendId = null;
+          setBusy(false);
+          addNotice('Could not reach the server.', 'error');
+          return;
+        }
+
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          pendingSendId = null;
+          addNotice(body.error || 'Request failed.', 'error');
+          setBusy(false);
+          return;
+        }
+        // A new chat's file is created by this turn; adopt its id only if the
+        // window is still showing the chat that was sent.
+        const body = await response.json().catch(() => ({}));
+        if (body.chatId && currentChatId === target) currentChatId = body.chatId;
+        if (body.chatId === currentChatId) pendingSendId = null;
+
+        input.value = '';
+        resizeInput();
+        saveDraft('');
+        staged = [];
+        renderStaged();
+        updateSendState();
+      }
+
+      function addAssistantChunk(text) {
+        activeTool = null;
+        if (!assistantBlock) assistantBlock = add('assistant');
+        assistantBlock.textContent += text;
+        scrollDown(false);
+      }
+
+      function addTool(name, args) {
+        assistantBlock = null;
+        const card = document.createElement('div');
+        card.className = 'tool';
+
+        const head = document.createElement('div');
+        head.className = 'tool-head';
+        const dot = document.createElement('span');
+        dot.className = 'dot';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'name';
+        nameEl.textContent = name;
+        const argsEl = document.createElement('span');
+        argsEl.className = 'args';
+        argsEl.textContent = summarize(args);
+        head.append(dot, nameEl, argsEl);
+
+        const out = document.createElement('pre');
+        out.className = 'out';
+
+        card.append(head, out);
+        log.appendChild(card);
+        activeTool = { card, out };
+        scrollDown(false);
+      }
+
+      function summarize(args) {
+        if (!args || typeof args !== 'object') return '';
+        for (const key of ['path', 'command', 'pattern']) {
+          if (typeof args[key] === 'string') return clip(args[key]);
+        }
+        const first = Object.values(args)[0];
+        return typeof first === 'string' ? clip(first) : '';
+      }
+
+      function clip(value) {
+        const single = String(value).replace(/\s+/g, ' ').trim();
+        return single.length > 90 ? single.slice(0, 90) + '…' : single;
+      }
+
+      function finishTool(name, content, isError) {
+        if (!activeTool) return;
+        const { card, out } = activeTool;
+        card.classList.add(isError ? 'error' : 'done');
+        out.textContent = content || '';
+        activeTool = null;
+        scrollDown(false);
+      }
+
+      function addApproval(event) {
+        if (!event.id || renderedApprovals.has(event.id)) return;
+        renderedApprovals.add(event.id);
+        assistantBlock = null;
+        const card = document.createElement('div');
+        card.className = 'approval';
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent =
+          event.kind === 'bash'
+            ? 'Approval needed - run command'
+            : event.kind === 'tool'
+              ? 'Approval needed - use tool'
+              : 'Approval needed - write file';
+
+        const code = document.createElement('code');
+        code.textContent = event.target || '';
+
+        const row = document.createElement('div');
+        row.className = 'row';
+
+        const once = document.createElement('button');
+        once.type = 'button';
+        once.className = 'primary';
+        once.textContent = 'Approve once';
+
+        const always = document.createElement('button');
+        always.type = 'button';
+        always.textContent = 'Always this session';
+
+        const deny = document.createElement('button');
+        deny.type = 'button';
+        deny.className = 'danger';
+        deny.textContent = 'Deny';
+
+        const decision = document.createElement('span');
+        decision.className = 'decision';
+
+        const decide = async (choice) => {
+          for (const button of row.querySelectorAll('button')) button.disabled = true;
+          decision.textContent = choice === 'deny' ? 'Denied' : 'Approved';
+          await post('/api/approve', { id: event.id, decision: choice });
+        };
+
+        once.addEventListener('click', () => decide('once'));
+        always.addEventListener('click', () => decide('always'));
+        deny.addEventListener('click', () => decide('deny'));
+
+        row.append(once, always, deny, decision);
+        card.append(title, code, row);
+        log.appendChild(card);
+        scrollDown(true);
+      }
+
+      function addQuestion(event) {
+        if (!event.id || renderedQuestions.has(event.id)) return;
+        renderedQuestions.add(event.id);
+        assistantBlock = null;
+        const card = document.createElement('div');
+        card.className = 'approval question';
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = 'Vaelen has a question';
+
+        const text = document.createElement('div');
+        text.className = 'question-text';
+        text.textContent = event.question || '';
+
+        const row = document.createElement('div');
+        row.className = 'row';
+
+        const decision = document.createElement('span');
+        decision.className = 'decision';
+
+        const finish = async (answer) => {
+          for (const control of card.querySelectorAll('button, input')) control.disabled = true;
+          decision.textContent = answer === null ? 'Skipped' : 'Answered';
+          const response = await post('/api/answer', { id: event.id, answer }).catch(() => null);
+          if (!response || !response.ok) {
+            decision.textContent = 'Could not send the answer';
+            for (const control of card.querySelectorAll('button, input')) control.disabled = false;
+          }
+        };
+
+        for (const option of event.options || []) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = option;
+          button.addEventListener('click', () => void finish(option));
+          row.append(button);
+        }
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.maxLength = 4000;
+        input.placeholder = (event.options || []).length > 0 ? 'Or type an answer…' : 'Answer…';
+        input.addEventListener('keydown', (keyEvent) => {
+          if (keyEvent.key !== 'Enter' || keyEvent.shiftKey) return;
+          keyEvent.preventDefault();
+          void finish(input.value);
+        });
+
+        const send = document.createElement('button');
+        send.type = 'button';
+        send.className = 'primary';
+        send.textContent = 'Answer';
+        send.addEventListener('click', () => void finish(input.value));
+
+        const skip = document.createElement('button');
+        skip.type = 'button';
+        skip.textContent = 'Skip';
+        skip.addEventListener('click', () => void finish(null));
+
+        row.append(input, send, skip);
+        card.append(title, text, row, decision);
+        log.appendChild(card);
+        scrollDown(true);
+        input.focus();
+      }
+
+      function formatTokens(value) {
+        if (value >= 100_000) return Math.round(value / 1000) + 'k';
+        if (value >= 1000) return (value / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
+        return String(value);
+      }
+
+      /** Compact number for the lifetime counter: 948, 12.4k, 3.21M, 1.4B. */
+      function formatCount(value) {
+        if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '0';
+        const trim = (text) => text.replace(/\.?0+$/, '');
+        if (value >= 1e9) return trim((value / 1e9).toFixed(2)) + 'B';
+        if (value >= 1e6) return trim((value / 1e6).toFixed(2)) + 'M';
+        if (value >= 1e4) return Math.round(value / 1e3) + 'k';
+        if (value >= 1e3) return trim((value / 1e3).toFixed(1)) + 'k';
+        return String(Math.round(value));
+      }
+
+      /** Short working time: 45s, 3m 12s, 2h 5m. */
+      function formatDuration(ms) {
+        if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < 0) ms = 0;
+        const sec = Math.floor(ms / 1000);
+        const h = Math.floor(sec / 3600);
+        const m = Math.floor((sec % 3600) / 60);
+        const s = sec % 60;
+        if (h > 0) return `${h}h ${m}m`;
+        if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`;
+        return `${s}s`;
+      }
+
+      let turnStartedAt = 0;
+      let sessionMs = 0;
+      let lifetimeMs = 0;
+      let lifetimeTurns = 0;
+      let turnTimer = 0;
+      const contextTurn = document.getElementById('context-turn');
+      const contextTime = document.getElementById('context-time');
+
+      function renderTime() {
+        const live = turnStartedAt > 0 ? Date.now() - turnStartedAt : 0;
+        contextTurn.textContent = live > 0 ? `working ${formatDuration(live)}` : 'idle';
+        contextTurn.title = live > 0
+          ? `This turn has been working for ${formatDuration(live)} (session ${formatDuration(sessionMs + live)}).`
+          : `Session working time: ${formatDuration(sessionMs)}.`;
+        contextTime.textContent = `${formatDuration(lifetimeMs + live)} working`;
+        contextTime.title =
+          `Working time across every session: ${formatDuration(lifetimeMs + live)} over ${(lifetimeTurns || 0).toLocaleString()} turns.` +
+          (currentLedger ? ` Time ledger: ${currentLedger.replace('usage.jsonl', 'time.jsonl')}` : '');
+      }
+
+      function startTurnTimer(startedAt) {
+        turnStartedAt = typeof startedAt === 'number' && startedAt > 0 ? startedAt : Date.now();
+        if (turnTimer) clearInterval(turnTimer);
+        turnTimer = setInterval(renderTime, 1000);
+        renderTime();
+      }
+
+      function stopTurnTimer(durationMs) {
+        if (typeof durationMs === 'number' && durationMs > 0) {
+          sessionMs += 0; // server already folded this turn into sessionMs via events; avoid double count here
+        }
+        turnStartedAt = 0;
+        if (turnTimer) { clearInterval(turnTimer); turnTimer = 0; }
+        renderTime();
+      }
+
+      function applyTimeFields(event) {
+        if (typeof event.sessionMs === 'number') sessionMs = event.sessionMs;
+        if (typeof event.lifetimeMs === 'number') lifetimeMs = event.lifetimeMs;
+        if (typeof event.lifetimeTurns === 'number') lifetimeTurns = event.lifetimeTurns;
+        if (event.timeLedger) currentLedger = currentLedger || event.timeLedger;
+        renderTime();
+      }
+
+      /** Lifetime tokens come from the server's ledger, which spans every session. */
+      function renderLifetime(lifetime) {
+        if (!lifetime || typeof lifetime.totalTokens !== 'number') return;
+        const grew = currentLifetime ? lifetime.totalTokens > currentLifetime.totalTokens : false;
+        currentLifetime = lifetime;
+        contextLifetime.textContent = formatCount(lifetime.totalTokens) + ' lifetime';
+
+        const plural = (value, word) => `${value.toLocaleString()} ${word}${value === 1 ? '' : 's'}`;
+        const parts = [
+          `${lifetime.totalTokens.toLocaleString()} tokens over ${plural(lifetime.requests || 0, 'request')}`,
+        ];
+        if (lifetime.sessions > 0) parts.push(plural(lifetime.sessions, 'session'));
+        if (lifetime.estimatedRequests > 0) {
+          parts.push(`${lifetime.estimatedRequests.toLocaleString()} estimated (provider sent no usage)`);
+        }
+        if (lifetime.firstAt) parts.push(`since ${String(lifetime.firstAt).slice(0, 10)}`);
+        contextLifetime.title =
+          `Lifetime tokens across every session. ${parts.join(' · ')}.` +
+          (currentLedger ? ` Ledger: ${currentLedger}` : '');
+
+        if (grew) {
+          // A brief tint confirms the counter is live without a distracting flash.
+          lifetimeBump += 1;
+          const bump = lifetimeBump;
+          contextLifetime.classList.add('bumped');
+          setTimeout(() => {
+            if (bump === lifetimeBump) contextLifetime.classList.remove('bumped');
+          }, 900);
+        }
+      }
+
+      /** Fills the top meter from a token estimate, or leaves it alone if none arrived. */
+      function renderContext(tokens, budget, modelWindow) {
+        if (typeof tokens !== 'number' || typeof budget !== 'number' || budget <= 0) return;
+        const ratio = tokens / budget;
+        const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
+        currentBudget = budget;
+        currentWindow = typeof modelWindow === 'number' && modelWindow > 0 ? modelWindow : 0;
+        contextFill.style.width = `${Math.max(ratio * 100, ratio > 0 ? 0.6 : 0).toFixed(2)}%`;
+        contextValue.textContent = `${formatTokens(tokens)} / ${formatTokens(budget)} · ${percent}%`;
+        contextBar.classList.toggle('warn', ratio >= 0.7 && ratio < 0.9);
+        contextBar.classList.toggle('hot', ratio >= 0.9);
+        contextTrack.setAttribute('aria-valuenow', String(percent));
+        contextBar.title =
+          `Context: ~${tokens.toLocaleString()} tokens, compaction at ${budget.toLocaleString()}` +
+          (currentWindow > 0 ? ` (model window ${currentWindow.toLocaleString()})` : '') +
+          `. Older tool output is trimmed automatically as the budget fills.`;
+      }
+
+      function setMode(mode) {
+        const read = mode === 'read';
+        modeRead.classList.toggle('active', read);
+        modeEdit.classList.toggle('active', !read);
+        modeRead.setAttribute('aria-pressed', String(read));
+        modeEdit.setAttribute('aria-pressed', String(!read));
+        input.placeholder = read
+          ? 'Ask Vaelen to inspect, explain, or search this project…'
+          : 'Ask Vaelen to change something in this project…';
+      }
+
+      async function chooseMode(mode) {
+        if (busy) return;
+        const response = await post('/api/mode', { mode });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          addNotice(body.error || 'Could not change mode.', 'error');
+          return;
+        }
+        addNotice(
+          mode === 'read'
+            ? 'Read-only mode — edits and mutating commands are blocked.'
+            : 'Edit mode — Vaelen can change files in this workspace.',
+        );
+        input.focus();
+      }
+
+      function setAsk(ask) {
+        const asking = ask === 'ask';
+        askAuto.classList.toggle('active', !asking);
+        askAsk.classList.toggle('active', asking);
+        askAuto.setAttribute('aria-pressed', String(!asking));
+        askAsk.setAttribute('aria-pressed', String(asking));
+      }
+
+      async function chooseAsk(ask) {
+        if (busy) return;
+        const asking = ask === 'ask';
+        const response = await post('/api/ask', { ask: asking });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          addNotice(body.error || 'Could not change ask mode.', 'error');
+          return;
+        }
+        addNotice(
+          asking
+            ? 'Ask mode — Vaelen may ask high-level clarifying questions.'
+            : 'Auto mode — no questions, Vaelen proceeds with its best guess.',
+        );
+        input.focus();
+      }
+
+      function relativeTime(value) {
+        const then = Date.parse(value || '');
+        if (!Number.isFinite(then)) return '';
+        const seconds = Math.max(0, Math.round((Date.now() - then) / 1000));
+        if (seconds < 45) return 'just now';
+        if (seconds < 3600) return Math.round(seconds / 60) + 'm ago';
+        if (seconds < 86_400) return Math.round(seconds / 3600) + 'h ago';
+        return Math.round(seconds / 86_400) + 'd ago';
+      }
+
+      /** The left rail: saved chats, newest first, with the active one highlighted. */
+      /** Last path segment, which is what identifies a project at a glance. */
+      function projectLabel(path) {
+        if (typeof path !== 'string' || path === '') return '';
+        const parts = path.split(/[\\/]/).filter((part) => part !== '');
+        return parts[parts.length - 1] || path;
+      }
+
+      let chatFilter = '';
+      let lastRailKey = '';
+
+      function renderChats(chats, activeId, undone) {
+        if (Array.isArray(chats)) currentChats = chats;
+        if (activeId !== undefined) currentChatId = activeId;
+        if (typeof undone === 'number') recoverable = undone;
+        recoverButton.disabled = recoverable === 0;
+        recoverButton.title =
+          recoverable === 0
+            ? 'No deleted chats to recover'
+            : `Recover the last deleted chat${recoverable > 1 ? ` (${recoverable} in the trash)` : ''}`;
+        // The rail is rebuilt from scratch on every turn, approval, and usage
+        // event; when the rows would be identical, keep the existing DOM (and its
+        // scroll position and hover state) instead of paying for the rebuild.
+        const railKey = JSON.stringify([
+          chatFilter,
+          currentChatId,
+          recoverable,
+          currentChats.map((chat) => [chat.id, chat.title, chat.messages, chat.busy, chat.needsApproval, chat.timeMs, chat.updatedAt, chat.workspace]),
+        ]);
+        if (railKey === lastRailKey && chatList.childElementCount > 0) return;
+        lastRailKey = railKey;
+
+        chatList.textContent = '';
+
+        if (currentChats.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'chat-empty';
+          empty.textContent = 'No saved chats yet. Send a message and it will be saved here.';
+          chatList.append(empty);
+          return;
+        }
+
+        const q = chatFilter.trim().toLowerCase();
+        const visible = q === '' ? currentChats : currentChats.filter((c) => (c.title || '').toLowerCase().includes(q));
+        if (q !== '' && visible.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'chat-empty';
+          empty.textContent = `No chats match "${chatFilter.trim()}".`;
+          chatList.append(empty);
+          // Still show the results area, which may hold message matches.
+          recoverButton.disabled = recoverable === 0;
+          return;
+        }
+        for (const chat of visible) {
+          const row = document.createElement('div');
+          row.className = 'chat-row';
+
+          const item = document.createElement('button');
+          item.type = 'button';
+          item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
+          item.title = chat.title;
+
+          const title = document.createElement('span');
+          title.className = 'chat-title';
+          title.textContent = chat.title;
+
+          // Every row carries its work status, so a background turn is visible
+          // without opening the chat. The label is for screen readers too.
+          const state = chat.needsApproval ? 'approval' : chat.busy ? 'working' : 'idle';
+          const status = document.createElement('span');
+          status.className = `chat-status ${state}`;
+          status.setAttribute('role', 'img');
+          status.setAttribute(
+            'aria-label',
+            state === 'working' ? 'Working' : state === 'approval' ? 'Waiting for your approval' : 'Idle',
+          );
+          status.title = status.getAttribute('aria-label');
+
+          const head = document.createElement('span');
+          head.className = 'chat-head';
+          head.append(status, title);
+
+          const meta = document.createElement('span');
+          meta.className = 'chat-meta';
+          const when = relativeTime(chat.updatedAt);
+          // Chats are per project, so the row names the folder it belongs to.
+          const project = projectLabel(chat.workspace);
+          meta.textContent =
+            (project ? project + ' · ' : '') +
+            chat.messages +
+            (chat.messages === 1 ? ' message' : ' messages') +
+            (chat.timeMs > 0 ? ' · ' + formatDuration(chat.timeMs) : '');
+          meta.title = chat.workspace || '';
+
+          item.append(head, meta);
+          item.addEventListener('click', () => void switchChat(chat.id));
+
+          const remove = document.createElement('button');
+          remove.type = 'button';
+          remove.className = 'chat-delete';
+          remove.textContent = '×';
+          remove.title = `Delete "${chat.title}"`;
+          remove.setAttribute('aria-label', `Delete chat ${chat.title}`);
+          remove.disabled = chat.busy === true;
+          remove.title = chat.busy ? 'Stop this chat before deleting it' : `Delete "${chat.title}"`;
+          remove.addEventListener('click', () => void deleteChat(chat));
+
+          row.append(item, remove);
+          chatList.append(row);
+        }
+      }
+
+      async function deleteChat(chat) {
+        if (chat.busy) {
+          addNotice('That chat is still working — stop it before deleting.', 'error');
+          return;
+        }
+        const response = await post('/api/chats/delete', { id: chat.id });
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          addNotice(body.error || 'Could not delete that chat.', 'error');
+          return;
+        }
+        addNotice(`Deleted "${chat.title}".`);
+      }
+
+      async function recoverChat() {
+        if (recoverable === 0) return;
+        const response = await post('/api/chats/recover', {});
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          addNotice(body.error || 'Nothing to recover.', 'error');
+          return;
+        }
+        const body = await response.json();
+        addNotice(`Recovered "${body.title}".`);
+      }
+
+      async function switchChat(id) {
+        if (id === currentChatId) return;
+        // Mark the row and show the transcript area as loading straight away, so a
+        // slow switch reads as work in progress rather than a dead click.
+        const previous = currentChatId;
+        currentChatId = id;
+        lastRailKey = '';
+        renderChats();
+        showSwitchPlaceholder(id);
+        const response = await post('/api/chats/switch', { id }).catch(() => null);
+        if (!response) {
+          currentChatId = previous;
+          lastRailKey = '';
+          renderChats();
+          addNotice('Could not reach the server.', 'error');
+          return;
+        }
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          currentChatId = previous;
+          lastRailKey = '';
+          renderChats();
+          renderHistory([]);
+          addNotice(body.error || 'Could not open that chat.', 'error');
+          return;
+        }
+        input.focus();
+      }
+
+      /** A quiet interstitial while a transcript is being fetched. */
+      function showSwitchPlaceholder(id) {
+        const row = currentChats.find((chat) => chat.id === id);
+        log.textContent = '';
+        assistantBlock = null;
+        activeTool = null;
+        const node = document.createElement('div');
+        node.className = 'notice';
+        node.textContent = 'Opening ' + (row?.title || 'chat') + '…';
+        log.append(node);
+      }
+
+      async function startNewChat() {
+        const response = await post('/api/chats', {});
+        if (!response.ok) {
+          const body = await response.json().catch(() => ({}));
+          addNotice(body.error || 'Could not start a new chat.', 'error');
+          return;
+        }
+        // Drop any send that never got its file id: it belonged to the old chat.
+        pendingSendId = null;
+        const body = await response.json().catch(() => ({}));
+        if (body.alreadyNew) {
+          addNotice('Already on a new chat — send a message and it will be saved here.');
+        }
+        input.focus();
+      }
+
+      /** Rebuilds the transcript for a chat loaded from disk (or still streaming). */
+      function renderHistory(history, partial = '', pendingApprovals = [], pendingQuestions = []) {
+        // Long chats made switching feel laggy: every message was appended to the
+        // live DOM, each append forcing a layout pass. Build detached, attach once.
+        log.textContent = '';
+        assistantBlock = null;
+        activeTool = null;
+        renderedApprovals = new Set();
+        renderedQuestions = new Set();
+        const fragment = document.createDocumentFragment();
+        const detach = log.appendChild;
+        log.appendChild = (node) => fragment.appendChild(node);
+        try {
+          layoutHistory(history, partial, pendingApprovals, pendingQuestions);
+        } finally {
+          log.appendChild = detach;
+          log.appendChild(fragment);
+        }
+        scrollDown(true);
+      }
+
+      /** Fills the transcript. Split out so renderHistory can batch the DOM work. */
+      function layoutHistory(history, partial, pendingApprovals, pendingQuestions) {
+
+        const results = new Map();
+        for (const message of history) {
+          if (message.role === 'tool') results.set(message.toolCallId, message);
+        }
+
+        // `search-index` matches the server's hit.index, so a search result can
+        // scroll to the exact message that matched.
+        history.forEach((message, position) => {
+          if (message.role === 'user') {
+            addUser(message.content || '', message.attachments || []).dataset.searchIndex = String(position);
+          } else if (message.role === 'assistant') {
+            if (message.content) add('assistant', message.content).dataset.searchIndex = String(position);
+            for (const call of message.toolCalls || []) {
+              addTool(call.name, call.args || {});
+              const result = results.get(call.id);
+              finishTool(
+                call.name,
+                result ? result.content : '(no result was saved)',
+                result ? Boolean(result.isError) : true,
+              );
+            }
+          }
+        });
+        // A chat whose turn is still streaming has text that is not yet a message.
+        if (partial) {
+          assistantBlock = add('assistant');
+          assistantBlock.textContent = partial;
+        }
+        for (const approval of pendingApprovals) addApproval(approval);
+        for (const question of pendingQuestions) addQuestion(question);
+      }
+
+      /** Recompute the shared status line from the rail (background turns keep it lit). */
+      function refreshBusyFromRail() {
+        const viewedBusy = busy;
+        const anyBusy = viewedBusy || currentChats.some((chat) => chat.busy && chat.id !== currentChatId);
+        modeRead.disabled = anyBusy;
+        modeEdit.disabled = anyBusy;
+        askAuto.disabled = anyBusy;
+        askAsk.disabled = anyBusy;
+        undoButton.disabled = anyBusy;
+        status.classList.toggle('busy', anyBusy);
+        statusLabel.textContent = anyBusy ? 'working' : 'idle';
+      }
+
+      /** Busy is per chat: other chats keep running while you look at this one. */
+      function setBusy(value) {
+        busy = value;
+        // The rail entry for this chat can lag the turn-end that just arrived, so
+        // only other chats decide whether the status line still says "working".
+        const anyBusy = value || currentChats.some((chat) => chat.busy && chat.id !== currentChatId);
+        // Mode is global, so it waits for every chat to be idle.
+        modeRead.disabled = anyBusy;
+        modeEdit.disabled = anyBusy;
+        askAuto.disabled = anyBusy;
+        askAsk.disabled = anyBusy;
+        undoButton.disabled = anyBusy;
+        stopButton.hidden = !value;
+        status.classList.toggle('busy', anyBusy);
+        statusLabel.textContent = anyBusy ? 'working' : 'idle';
+        updateSendState();
+        if (!value) {
+          const active = document.activeElement;
+          if (active === document.body || active === sendButton || active === stopButton) input.focus();
+        }
+      }
+
+      function handle(event) {
+        if (typeof event.usageLedger === 'string') currentLedger = event.usageLedger;
+
+        // A send on an unsaved chat learns its new file id from the echoed
+        // request; this works even if the event beats the POST response.
+        if (
+          event.type === 'user' &&
+          event.requestId &&
+          event.requestId === pendingSendId &&
+          event.chatId &&
+          currentChatId === null
+        ) {
+          currentChatId = event.chatId;
+          pendingSendId = null;
+        }
+
+        // Events from another chat must not touch this transcript; only the
+        // shared chrome (rail, lifetime counter) follows them.
+        if (event.chatId !== undefined && event.chatId !== currentChatId) {
+          if (event.type === 'turn-end' || event.type === 'approval') {
+            if (event.chats) renderChats(event.chats, undefined, event.recoverable);
+            renderLifetime(event.lifetime);
+            // Another chat's state changed; recompute the shared status line.
+            setBusy(busy);
+          }
+          return;
+        }
+
+        switch (event.type) {
+          case 'hello':
+            currentModel = event.model;
+            currentBaseUrl = event.baseUrl;
+            modelBadge.textContent = event.model;
+            setWorkspacePath(event.workspace);
+            setMode(event.mode === 'read' ? 'read' : 'edit');
+            setAsk(event.ask === 'ask' ? 'ask' : 'auto');
+            setBusy(Boolean(event.busy));
+            verifyEnabled = event.verify !== false;
+            currentMaxSteps = typeof event.maxSteps === 'number' ? event.maxSteps : 100;
+            renderContext(event.tokens, event.budget, event.modelWindow);
+            renderLifetime(event.lifetime);
+            applyTimeFields(event);
+            if (event.busy) startTurnTimer(Date.now());
+            currentChatId = event.activeChatId || null;
+            currentRepo = event.repo || null;
+            renderRepoState({ repo: currentRepo });
+            renderChats(event.chats || [], currentChatId, event.recoverable);
+            renderHistory(
+              event.history || [],
+              event.partial || '',
+              event.pendingApprovals || [],
+              event.pendingQuestions || [],
+            );
+            restoreDraft();
+            if (!event.hasKey && event.needsKey) {
+              addNotice('No API key yet — follow the welcome card to connect DeepSeek.');
+              showOnboarding(true);
+            } else {
+              showOnboarding(false);
+            }
+            break;
+          case 'workspace':
+            // Projects are per chat: another chat changing folder must not disturb
+            // the transcript, draft, or attachments this window is showing.
+            if (event.chatId !== undefined && event.chatId !== currentChatId) break;
+            saveDraft(input.value);
+            setWorkspacePath(event.workspace);
+            currentRepo = event.repo || null;
+            renderRepoState({ repo: currentRepo });
+            input.value = '';
+            resizeInput();
+            staged = [];
+            renderStaged();
+            restoreDraft();
+            addNotice('This chat now works in ' + event.workspace);
+            break;
+          case 'mode':
+            setMode(event.mode === 'read' ? 'read' : 'edit');
+            break;
+          case 'ask':
+            setAsk(event.ask === 'ask' ? 'ask' : 'auto');
+            break;
+          case 'user':
+            addUser(event.text, event.attachments || [], event.steer === true);
+            break;
+          case 'text':
+            addAssistantChunk(event.text);
+            break;
+          case 'text-end':
+            assistantBlock = null;
+            break;
+          case 'tool-start':
+            addTool(event.name, event.args);
+            break;
+          case 'tool-output':
+            if (activeTool) {
+              activeTool.out.textContent += event.text;
+              scrollDown(false);
+            }
+            break;
+          case 'tool-end':
+            finishTool(event.name, event.content, event.isError);
+            break;
+          case 'approval':
+            addApproval(event);
+            break;
+          case 'question':
+            addQuestion(event);
+            break;
+          case 'notice':
+            addNotice(event.message, event.level);
+            break;
+          case 'error':
+            addNotice(event.message, 'error');
+            break;
+          case 'turn-start':
+            startTurnTimer(event.startedAt);
+            applyTimeFields(event);
+            break;
+          case 'usage':
+            renderLifetime(event.lifetime);
+            applyTimeFields(event);
+            break;
+          case 'chats':
+            renderChats(event.chats, event.activeChatId, event.recoverable);
+            // A new/empty chat reports idle, but background chats may still run.
+            refreshBusyFromRail();
+            break;
+          case 'repos':
+            // The picker is per chat; a background chat's change must not repaint it.
+            if (event.chatId === undefined || event.chatId === currentChatId) renderRepoState(event);
+            break;
+          case 'chat':
+            currentChatId = event.id || null;
+            setBusy(Boolean(event.busy));
+            if (event.chats) renderChats(event.chats, event.activeChatId, event.recoverable);
+            // A search hit asked to reveal a message: do it once this transcript is up.
+            requestAnimationFrame(revealJump);
+            // Each snapshot carries its own project, so switching chats swaps the
+            // header and the repository badge along with the transcript.
+            if (event.workspace) setWorkspacePath(event.workspace);
+            currentRepo = event.repo || null;
+            renderRepoState({ repo: currentRepo });
+            renderHistory(
+              event.messages || [],
+              event.partial || '',
+              event.pendingApprovals || [],
+              event.pendingQuestions || [],
+            );
+            renderContext(event.tokens, event.budget, event.modelWindow);
+            renderLifetime(event.lifetime);
+            applyTimeFields(event);
+            break;
+          case 'turn-end':
+            // The rail first: the status line asks it whether other chats are busy.
+            if (event.chats) renderChats(event.chats, event.activeChatId, event.recoverable);
+            setBusy(false);
+            stopTurnTimer(event.durationMs);
+            renderContext(event.tokens, event.budget, event.modelWindow);
+            renderLifetime(event.lifetime);
+            applyTimeFields(event);
+            if (event.reason === 'max-steps') addNotice('Stopped at the step limit.', 'error');
+            if (event.reason === 'verify-failed') addNotice('Stopped: the project checks kept failing.', 'error');
+            if (event.reason === 'repeat-loop') addNotice('Stopped: the agent kept repeating the same tool call.', 'error');
+            if (event.reason === 'aborted') addNotice('Interrupted.');
+            scrollDown(false);
+            break;
+          case 'send-failed':
+            // The turn produced nothing, so the harness took the message back out
+            // of the transcript. Return the text so the send can be retried.
+            if (typeof event.text === 'string' && event.text !== '') {
+              if (input.value.trim() === '') {
+                input.value = event.text;
+                resizeInput();
+                saveDraft(event.text);
+                updateSendState();
+                input.focus();
+              } else {
+                addNotice('That message did not send — the composer already had other text.', 'error');
+              }
+            }
+            if (event.attachments) addNotice('Attach those files again: the send did not go through.', 'error');
+            break;
+          case 'cleared':
+            renderContext(event.tokens, event.budget, event.modelWindow);
+            renderLifetime(event.lifetime);
+            applyTimeFields(event);
+            log.textContent = '';
+            assistantBlock = null;
+            activeTool = null;
+            renderedQuestions = new Set();
+            staged = [];
+            renderStaged();
+            input.value = '';
+            resizeInput();
+            saveDraft('');
+            updateSendState();
+            if (event.chats) renderChats(event.chats, event.activeChatId, event.recoverable);
+            addNotice('New chat started.');
+            break;
+          case 'config':
+            currentModel = event.model;
+            currentBaseUrl = event.baseUrl;
+            modelBadge.textContent = event.model;
+            if (typeof event.verify === 'boolean') verifyEnabled = event.verify;
+            if (event.ask === 'ask' || event.ask === 'auto') setAsk(event.ask);
+            if (typeof event.maxSteps === 'number') currentMaxSteps = event.maxSteps;
+            renderContext(event.tokens, event.budget, event.modelWindow);
+            renderLifetime(event.lifetime);
+            applyTimeFields(event);
+            break;
+        }
+      }
+
+      const events = new EventSource('/api/events?token=' + encodeURIComponent(token));
+      events.onmessage = (message) => {
+        try {
+          handle(JSON.parse(message.data));
+        } catch (error) {
+          console.error(error);
+        }
+      };
+      events.onerror = () => {
+        statusLabel.textContent = 'reconnecting';
+      };
+
+      document.getElementById('composer').addEventListener('submit', (event) => {
+        event.preventDefault();
+        void send();
+      });
+
+      input.addEventListener('compositionstart', () => {
+        composing = true;
+      });
+      input.addEventListener('compositionend', () => {
+        composing = false;
+      });
+
+      input.addEventListener('keydown', (event) => {
+        // Enter in an IME picker must select a candidate, never send the message.
+        if (event.isComposing || composing || event.keyCode === 229) return;
+        if (event.key !== 'Enter' || event.shiftKey) return;
+        event.preventDefault();
+        void send();
+      });
+
+      input.addEventListener('input', () => {
+        resizeInput();
+        saveDraft(input.value);
+        updateSendState();
+      });
+
+      input.addEventListener('paste', (event) => {
+        const data = event.clipboardData;
+        if (!data) return;
+
+        const files = Array.from(data.items || [])
+          .filter((item) => item.kind === 'file')
+          .map((item) => item.getAsFile())
+          .filter(Boolean);
+        if (files.length > 0) {
+          event.preventDefault();
+          void addFiles(files);
+          return;
+        }
+
+        const text = data.getData('text/plain');
+        if (text.length > LONG_PASTE_CHARS || text.split('\n').length > 200) {
+          event.preventDefault();
+          addPastedText(text);
+        }
+      });
+
+      attachButton.addEventListener('click', () => fileInput.click());
+      screenshotButton.addEventListener('click', () => void captureScreenshot());
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
+        screenshotButton.hidden = true;
+      }
+      fileInput.addEventListener('change', () => {
+        if (fileInput.files && fileInput.files.length > 0) void addFiles(fileInput.files);
+        fileInput.value = '';
+      });
+
+      let dragDepth = 0;
+      function hasFiles(event) {
+        return Array.from(event.dataTransfer?.types || []).includes('Files');
+      }
+      function showDrop(active) {
+        footerEl.classList.toggle('drop-active', active);
+        dropHint.hidden = !active;
+      }
+      window.addEventListener('dragenter', (event) => {
+        if (!hasFiles(event)) return;
+        event.preventDefault();
+        dragDepth++;
+        showDrop(true);
+      });
+      window.addEventListener('dragover', (event) => {
+        if (!hasFiles(event)) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = 'copy';
+      });
+      window.addEventListener('dragleave', () => {
+        if (dragDepth === 0) return;
+        dragDepth = Math.max(0, dragDepth - 1);
+        if (dragDepth === 0) showDrop(false);
+      });
+      window.addEventListener('drop', (event) => {
+        if (!hasFiles(event)) return;
+        event.preventDefault();
+        dragDepth = 0;
+        showDrop(false);
+        void addDrop(event.dataTransfer);
+      });
+
+      stopButton.addEventListener('click', () =>
+        post('/api/abort', { chatId: currentChatId || '' }).catch(() => undefined),
+      );
+
+      modeRead.addEventListener('click', () => chooseMode('read'));
+      modeEdit.addEventListener('click', () => chooseMode('edit'));
+      askAuto.addEventListener('click', () => chooseAsk('auto'));
+      askAsk.addEventListener('click', () => chooseAsk('ask'));
+
+      const chatSearch = document.getElementById('chat-search');
+      const searchResults = document.getElementById('search-results');
+      /** The transcript index to scroll to once a switched-to chat renders. */
+      let pendingJump = null;
+      let searchTimer = null;
+      let searchSeq = 0;
+
+      /** Highlights every query term inside a snippet, without touching innerHTML. */
+      function renderSnippet(node, text, parsed) {
+        const needles = [...(parsed?.terms || []), ...(parsed?.phrases || [])].filter((t) => t !== '');
+        if (needles.length === 0) {
+          node.textContent = text;
+          return;
+        }
+        const lower = text.toLowerCase();
+        const ranges = [];
+        for (const needle of needles) {
+          let at = lower.indexOf(needle);
+          while (at >= 0) {
+            ranges.push([at, at + needle.length]);
+            at = lower.indexOf(needle, at + needle.length);
+          }
+        }
+        ranges.sort((a, b) => a[0] - b[0]);
+        let cursor = 0;
+        for (const [start, end] of ranges) {
+          if (end <= cursor) continue;
+          const from = Math.max(start, cursor);
+          if (from > cursor) node.append(text.slice(cursor, from));
+          const mark = document.createElement('mark');
+          mark.textContent = text.slice(from, end);
+          node.append(mark);
+          cursor = end;
+        }
+        if (cursor < text.length) node.append(text.slice(cursor));
+      }
+
+      function showSearchResults(body) {
+        searchResults.textContent = '';
+        if (!body || !Array.isArray(body.results)) {
+          searchResults.hidden = true;
+          chatList.hidden = false;
+          return;
+        }
+        searchResults.hidden = false;
+        chatList.hidden = true;
+
+        const status = document.createElement('div');
+        status.className = 'search-status';
+        const hits = body.results.length;
+        status.textContent =
+          hits === 0
+            ? 'No message matches that query.'
+            : `${hits}${body.truncated ? '+' : ''} message${hits === 1 ? '' : 's'} in ${body.chatsScanned} chat${body.chatsScanned === 1 ? '' : 's'}` +
+              (body.truncated ? ' — narrow the query to see the rest.' : '');
+        searchResults.append(status);
+
+        for (const hit of body.results) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'search-hit';
+          button.title = hit.project;
+
+          const head = document.createElement('span');
+          head.className = 'hit-head';
+          const chatName = document.createElement('span');
+          chatName.className = 'hit-chat';
+          chatName.textContent = hit.chatTitle;
+          const role = document.createElement('span');
+          role.className = 'hit-role';
+          role.textContent = hit.role === 'tool' && hit.tool ? hit.tool : hit.role;
+          head.append(chatName, role);
+
+          const snippet = document.createElement('span');
+          snippet.className = 'hit-snippet';
+          renderSnippet(snippet, hit.snippet || '', body.parsed);
+
+          button.append(head, snippet);
+          button.addEventListener('click', () => void jumpToHit(hit));
+          searchResults.append(button);
+        }
+      }
+
+      /** Reveals the message a hit points at, switching chats when needed. */
+      async function jumpToHit(hit) {
+        pendingJump = typeof hit.index === 'number' ? hit.index : null;
+        if (hit.chatId && hit.chatId !== currentChatId) {
+          const response = await post('/api/chats/switch', { id: hit.chatId });
+          if (!response.ok) {
+            pendingJump = null;
+            addNotice('Could not open that chat.', 'error');
+            return;
+          }
+        } else {
+          revealJump();
+        }
+        if (chatSearch) {
+          chatSearch.value = '';
+          chatFilter = '';
+          showSearchResults(null);
+          renderChats();
+        }
+      }
+
+      /** Scrolls to and flashes the pending message once its chat is on screen. */
+      function revealJump() {
+        if (pendingJump === null) return;
+        const target = log.querySelector(`[data-search-index="${pendingJump}"]`);
+        pendingJump = null;
+        if (!target) return;
+        target.scrollIntoView({ block: 'center' });
+        target.classList.remove('flash');
+        // Re-add on the next frame so a repeated jump re-runs the animation.
+        requestAnimationFrame(() => target.classList.add('flash'));
+      }
+
+      function runSearch() {
+        const query = (chatSearch?.value || '').trim();
+        // Titles filter instantly; message search is debounced and sequenced so an
+        // older response can never overwrite a newer one.
+        chatFilter = chatSearch?.value || '';
+        renderChats();
+        if (searchTimer) clearTimeout(searchTimer);
+        if (query === '' || query.length < 2) {
+          showSearchResults(null);
+          return;
+        }
+        searchTimer = setTimeout(async () => {
+          const seq = ++searchSeq;
+          try {
+            const { response, body } = await getJson('/api/search?q=' + encodeURIComponent(query) + '&limit=50');
+            if (seq !== searchSeq) return;
+            if (!response.ok) {
+              showSearchResults(null);
+              addNotice(body?.error || 'Search failed.', 'error');
+              return;
+            }
+            showSearchResults(body);
+          } catch {
+            if (seq === searchSeq) addNotice('Could not reach the server.', 'error');
+          }
+        }, 180);
+      }
+
+      if (chatSearch) {
+        chatSearch.addEventListener('input', runSearch);
+        chatSearch.addEventListener('keydown', (event) => {
+          if (event.key === 'Escape') {
+            chatSearch.value = '';
+            runSearch();
+          }
+          if (event.key === 'Enter') {
+            const first = searchResults.querySelector('.search-hit');
+            if (first) {
+              event.preventDefault();
+              first.click();
+            }
+          }
+        });
+      }
+      newChatButton.addEventListener('click', () => void startNewChat());
+      recoverButton.addEventListener('click', () => void recoverChat());
+      undoButton.addEventListener('click', async () => {
+        const response = await post('/api/undo', {});
+        if (response.ok) return; // the server broadcasts the notice to every window
+        const body = await response.json().catch(() => ({}));
+        addNotice(body.error || 'Nothing to undo.', response.status === 404 ? 'info' : 'error');
+      });
+
+      const repoBadge = document.getElementById('repo-badge');
+      const repoStatus = document.getElementById('repo-status');
+      const repoInput = document.getElementById('repo-input');
+      const repoOpenButton = document.getElementById('repo-open');
+      const repoCloseButton = document.getElementById('repo-close');
+      const repoHint = document.getElementById('repo-hint');
+      const repoHistoryEl = document.getElementById('repo-history');
+      const repoMineEl = document.getElementById('repo-mine');
+      const repoMineButton = document.getElementById('repo-mine-load');
+
+      function repoLabel(repo) {
+        return repo.owner + '/' + repo.name;
+      }
+
+      function renderRepoBadge() {
+        repoBadge.hidden = !currentRepo;
+        if (!currentRepo) return;
+        repoBadge.textContent = repoLabel(currentRepo);
+        repoBadge.title = 'Working in GitHub repository ' + repoLabel(currentRepo) + ' — click to change';
+      }
+
+      /** One row in the history or \"my repositories\" list. */
+      function repoRow(entry, options) {
+        const row = document.createElement('div');
+        row.className = 'repo-item';
+
+        const name = document.createElement('span');
+        name.className = 'name';
+        name.textContent = repoLabel(entry);
+        name.title = entry.path || repoLabel(entry);
+
+        const meta = document.createElement('span');
+        meta.className = 'meta';
+        meta.textContent = options.meta || '';
+
+        const open = document.createElement('button');
+        open.type = 'button';
+        open.textContent = 'Open';
+        open.addEventListener('click', () => void openRepo(repoLabel(entry)));
+
+        row.append(name, meta, open);
+        if (options.forget) {
+          const forget = document.createElement('button');
+          forget.type = 'button';
+          forget.textContent = '×';
+          forget.title = 'Remove from history (the local clone stays) ';
+          forget.setAttribute('aria-label', 'Remove ' + repoLabel(entry) + ' from history');
+          forget.addEventListener('click', () => void forgetRepoRow(entry));
+          row.append(forget);
+        }
+        return row;
+      }
+
+      function renderRepoState(state) {
+        if (state.repo !== undefined) currentRepo = state.repo;
+        if (Array.isArray(state.history)) repoHistory = state.history;
+        renderRepoBadge();
+
+        repoStatus.textContent = currentRepo
+          ? 'Working in ' + repoLabel(currentRepo) + ' — ' + currentWorkspace
+          : 'No repository — working in the local folder below.';
+        repoCloseButton.hidden = !currentRepo;
+
+        repoHistoryEl.textContent = '';
+        if (repoHistory.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'repo-empty';
+          empty.textContent = 'No repositories opened yet — enter owner/name above.';
+          repoHistoryEl.append(empty);
+        } else {
+          for (const entry of repoHistory) {
+            repoHistoryEl.append(repoRow(entry, { meta: relativeTime(entry.openedAt), forget: true }));
+          }
+        }
+      }
+
+      async function refreshRepos() {
+        try {
+          const { response, body } = await getJson('/api/repos?chatId=' + encodeURIComponent(currentChatId || ''));
+          if (!response.ok) return;
+          renderRepoState(body);
+          const gh = body.gh || {};
+          repoHint.classList.remove('error');
+          repoHint.textContent =
+            gh.installed === false
+              ? 'GitHub CLI (gh) not found — public repositories still clone over HTTPS.'
+              : gh.authenticated
+                ? 'Signed in to GitHub' + (gh.user ? ' as ' + gh.user : '') + ' — private repositories work too.'
+                : 'Not signed in to GitHub. Run "gh auth login" for private repositories.';
+        } catch {
+          // The dialog still reflects the last known state if the fetch fails.
+        }
+      }
+
+      async function openRepo(spec) {
+        const text = String(spec || '').trim();
+        if (text === '') {
+          repoHint.classList.add('error');
+          repoHint.textContent = 'Enter a repository as owner/name.';
+          return;
+        }
+        repoOpenButton.disabled = true;
+        repoHint.classList.remove('error');
+        repoHint.textContent = 'Opening ' + text + '… (first use clones it)';
+        try {
+          // The repository belongs to the visible chat, not to the process.
+          const response = await post('/api/repos/open', { repo: text, chatId: currentChatId || '' });
+          const body = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            repoHint.classList.add('error');
+            repoHint.textContent = body.error || 'Could not open that repository.';
+            return;
+          }
+          repoInput.value = '';
+          repoHint.textContent = '';
+          settingsPanel.close();
+          addNotice((body.cloned ? 'Cloned ' : 'Opened ') + body.label + ' for this chat in ' + body.path + '.');
+        } catch {
+          repoHint.classList.add('error');
+          repoHint.textContent = 'Could not reach the server.';
+        } finally {
+          repoOpenButton.disabled = false;
+        }
+      }
+
+      async function closeRepo() {
+        const response = await post('/api/repos/close', { chatId: currentChatId || '' });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          addNotice(body.error || 'Could not close the repository.', 'error');
+          return;
+        }
+        settingsPanel.close();
+        addNotice('Repository closed for this chat — back to ' + body.workspace + '.');
+      }
+
+      async function forgetRepoRow(entry) {
+        const response = await post('/api/repos/forget', { repo: repoLabel(entry) });
+        const body = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          addNotice(body.error || 'Could not update the repository history.', 'error');
+          return;
+        }
+        renderRepoState({ repo: currentRepo, history: body.history });
+      }
+
+      async function loadOwnRepos() {
+        repoMineButton.disabled = true;
+        repoHint.classList.remove('error');
+        repoHint.textContent = 'Loading your GitHub repositories…';
+        try {
+          const { response, body } = await getJson('/api/repos/mine');
+          repoMineEl.textContent = '';
+          if (!response.ok) {
+            repoHint.classList.add('error');
+            repoHint.textContent = body.error || 'Could not list your repositories.';
+            return;
+          }
+          const repos = Array.isArray(body.repos) ? body.repos : [];
+          if (repos.length === 0) {
+            repoHint.textContent = 'GitHub returned no repositories for this account.';
+            return;
+          }
+          repoHint.textContent = repos.length + ' repositories from your GitHub account.';
+          for (const entry of repos) {
+            repoMineEl.append(
+              repoRow(entry, { meta: entry.visibility === 'private' ? 'private' : 'public' }),
+            );
+          }
+        } catch {
+          repoHint.classList.add('error');
+          repoHint.textContent = 'Could not reach the server.';
+        } finally {
+          repoMineButton.disabled = false;
+        }
+      }
+
+      function openSettings(needsKey) {
+        renderRepoState({ repo: currentRepo });
+        void refreshRepos();
+        document.getElementById('base-url').value = currentBaseUrl;
+        document.getElementById('model-input').value = currentModel;
+        document.getElementById('context-budget').value = currentBudget || '';
+        verifyToggle.checked = verifyEnabled;
+        syncStepFields();
+        document.getElementById('key-required').hidden = !needsKey;
+        document.getElementById('key-hint').hidden = Boolean(needsKey);
+        settingsPanel.showModal();
+        if (needsKey) setTimeout(() => document.getElementById('api-key').focus(), 30);
+      }
+
+      /** The number box is meaningless while "no limit" is checked. */
+      function syncStepFields() {
+        const unlimited = currentMaxSteps <= 0;
+        maxStepsUnlimited.checked = unlimited;
+        maxStepsInput.disabled = unlimited;
+        maxStepsInput.value = unlimited ? '' : String(currentMaxSteps);
+        maxStepsInput.placeholder = '100';
+      }
+
+      maxStepsUnlimited.addEventListener('change', () => {
+        if (maxStepsUnlimited.checked) {
+          maxStepsInput.dataset.previous = maxStepsInput.value || '100';
+          maxStepsInput.value = '';
+          maxStepsInput.disabled = true;
+          return;
+        }
+        maxStepsInput.disabled = false;
+        maxStepsInput.value = maxStepsInput.dataset.previous || '100';
+      });
+
+      const onboarding = document.getElementById('onboarding');
+      const onboardingKey = document.getElementById('onboarding-key');
+      const onboardingError = document.getElementById('onboarding-error');
+      function showOnboarding(show) {
+        onboarding.hidden = !show;
+        if (show) setTimeout(() => onboardingKey.focus(), 30);
+      }
+      async function connectOnboarding() {
+        const apiKey = onboardingKey.value.trim();
+        if (!apiKey) {
+          onboardingError.textContent = 'Paste your sk-… key first — see step 2 above.';
+          onboardingKey.focus();
+          return;
+        }
+        onboardingError.textContent = '';
+        const response = await post('/api/config', { apiKey });
+        if (response.ok) {
+          onboardingKey.value = '';
+          showOnboarding(false);
+          addNotice('Connected — key saved, new sessions will reconnect automatically.');
+        } else {
+          onboardingError.textContent = 'Could not save that key. Check it starts with sk- and try again.';
+        }
+      }
+      document.getElementById('onboarding-connect').addEventListener('click', () => void connectOnboarding());
+      onboardingKey.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          void connectOnboarding();
+        }
+      });
+      document.getElementById('onboarding-settings').addEventListener('click', () => {
+        showOnboarding(false);
+        openSettings(true);
+      });
+      document.getElementById('settings').addEventListener('click', () => openSettings(false));
+      repoBadge.addEventListener('click', () => openSettings(false));
+      repoOpenButton.addEventListener('click', () => void openRepo(repoInput.value));
+      repoCloseButton.addEventListener('click', () => void closeRepo());
+      repoMineButton.addEventListener('click', () => void loadOwnRepos());
+      repoInput.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        void openRepo(repoInput.value);
+      });
+
+      document.getElementById('settings-cancel').addEventListener('click', () => settingsPanel.close());
+
+      /**
+       * The header field is the one place a chat's project folder is shown, so
+       * every event that changes the folder paints it here.
+       */
+      function setWorkspacePath(path) {
+        currentWorkspace = typeof path === 'string' ? path : '';
+        workspaceInput.value = currentWorkspace;
+        if (currentWorkspace !== '') workspaceInput.title = currentWorkspace;
+      }
+
+      /** Applies a typed path to this chat; the server broadcasts the result. */
+      let workspaceSwitching = false;
+      async function commitWorkspacePath() {
+        const requested = workspaceInput.value.trim();
+        // Same folder spelled differently (case, trailing separator) is not a move.
+        const normalized = requested.replace(/[\\/]+$/, '').toLowerCase();
+        const current = currentWorkspace.replace(/[\\/]+$/, '').toLowerCase();
+        // An unchanged or empty field is not a request: put the real path back.
+        if (normalized === '' || normalized === current) {
+          setWorkspacePath(currentWorkspace);
+          return;
+        }
+        if (workspaceSwitching) return;
+        workspaceSwitching = true;
+        try {
+          const response = await post('/api/workspace', { path: requested, chatId: currentChatId || '' });
+          if (response.ok) return;
+          const body = await response.json().catch(() => ({}));
+          addNotice(body.error || 'Could not switch the project folder.', 'error');
+          setWorkspacePath(currentWorkspace);
+        } catch (error) {
+          addNotice('Could not switch the project folder: ' + (error && error.message ? error.message : error), 'error');
+          setWorkspacePath(currentWorkspace);
+        } finally {
+          workspaceSwitching = false;
+        }
+      }
+
+      workspaceInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          void commitWorkspacePath();
+        } else if (event.key === 'Escape') {
+          setWorkspacePath(currentWorkspace);
+          workspaceInput.blur();
+        }
+      });
+      // Leaving the field applies what was typed, so a click elsewhere is a commit.
+      workspaceInput.addEventListener('change', () => void commitWorkspacePath());
+
+      document.getElementById('settings-form').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        const baseUrl = document.getElementById('base-url').value.trim();
+        const model = document.getElementById('model-input').value.trim();
+        const budgetText = document.getElementById('context-budget').value.trim();
+        const stepsText = maxStepsInput.value.trim();
+        const apiKey = document.getElementById('api-key').value.trim();
+        const opencodeKey = document.getElementById('opencode-key').value.trim();
+
+        const budget = budgetText === '' ? undefined : Number(budgetText);
+        if (budget !== undefined && (!Number.isFinite(budget) || budget <= 1000)) {
+          addNotice('Context budget must be more than 1,000 tokens.', 'error');
+          return;
+        }
+
+        // 0 is how the server spells "no limit"; the checkbox is the only way to ask.
+        let steps;
+        if (maxStepsUnlimited.checked) {
+          steps = 0;
+        } else {
+          steps = stepsText === '' ? undefined : Number(stepsText);
+          if (steps !== undefined && (!Number.isFinite(steps) || steps < 1 || steps > 100000)) {
+            addNotice('Steps per turn must be between 1 and 100,000, or tick “No step limit”.', 'error');
+            return;
+          }
+        }
+
+        const payload = {};
+        if (baseUrl) payload.baseUrl = baseUrl;
+        if (model) payload.model = model;
+        if (apiKey) payload.apiKey = apiKey;
+        if (opencodeKey) payload.opencodeKey = opencodeKey;
+        if (budget !== undefined && budget !== currentBudget) payload.contextBudget = budget;
+        if (steps !== undefined && steps !== currentMaxSteps) payload.maxSteps = steps;
+        if (verifyToggle.checked !== verifyEnabled) payload.verify = verifyToggle.checked;
+        const response = await post('/api/config', payload);
+        if (response.ok) {
+          const body = await response.json().catch(() => ({}));
+          verifyEnabled = verifyToggle.checked;
+          if (typeof body.maxSteps === 'number') currentMaxSteps = body.maxSteps;
+          settingsPanel.close();
+          addNotice(
+            body.persisted
+              ? 'Connection saved — new sessions will reconnect automatically.'
+              : 'Connection updated for this session only.',
+          );
+          if (payload.maxSteps === 0) {
+            addNotice('No step limit — turns run until they finish or you press Stop.');
+          }
+        } else {
+          const body = await response.json().catch(() => ({}));
+          addNotice(body.error || 'Could not update the connection.', 'error');
+        }
+      });
+
+      renderStaged();
+      updateSendState();
+      input.focus();
+    </script>
+  </body>
+</html>

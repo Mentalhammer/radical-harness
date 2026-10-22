@@ -1,0 +1,10 @@
+node_modules/
+.vaelen/
+.env
+*.log
+dist/
+VaelenGUI.exe
+VaelenGUI.exe.old-*
+
+# local playground file used to try the agent out
+hello-world.txt
