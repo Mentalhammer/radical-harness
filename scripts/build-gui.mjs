@@ -48,7 +48,7 @@ execFileSync(process.execPath, ['--experimental-sea-config', 'sea-config.json'],
   stdio: 'inherit',
 });
 
-const exePath = join(ROOT, 'VaelenGUI.exe');
+const exePath = join(ROOT, 'RadicalHarness.exe');
 
 // Windows can keep the previous image locked (antivirus scan, a still-closing
 // process). Deleting may fail while renaming aside still works, so try both.

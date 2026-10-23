@@ -3,6 +3,15 @@ import { MAX_ATTACHMENT_CHARS, type Message, type ToolMessage } from './types.ts
 const CHARS_PER_TOKEN = 4;
 const ELIDED = '[earlier tool output elided — see summary on system prompt]';
 const TRIMMED_NOTE = '[Earlier conversation trimmed to fit the context window.]';
+/**
+ * The summary is a hint, not a manifest, so its variable parts are capped — and
+ * `compact` reserves exactly these caps before it starts dropping turns. A note
+ * larger than its reserve would push a trimmed transcript back over budget.
+ */
+const NOTE_INTENT_CHARS = 160;
+const NOTE_FILES_CHARS = 240;
+const NOTE_MAX_CHARS =
+  `\n\n${TRIMMED_NOTE} Goal was:  Files: .`.length + NOTE_INTENT_CHARS + NOTE_FILES_CHARS;
 
 /** Cheap chars/4 estimate for arbitrary text (model replies, tool arguments). */
 export function textTokens(text: string): number {
@@ -95,7 +104,7 @@ export function compact(messages: Message[], budget: number): boolean {
   // The trimmed-notice lands on the system prompt, so budget for it up front;
   // otherwise adding it could push the transcript back over the limit.
   const hasNote = hasSystem && messages[0]?.content.includes(TRIMMED_NOTE) === true;
-  const noteReserve = hasNote ? 0 : textTokens(`\n\n${TRIMMED_NOTE}`) + 4;
+  const noteReserve = hasNote ? 0 : Math.ceil(NOTE_MAX_CHARS / CHARS_PER_TOKEN);
   // Walk forward turn by turn, subtracting sizes, then splice once. Splicing
   // per turn shifted the whole array every time, which is quadratic for a long
   // conversation even after the measurement itself became linear.
@@ -138,14 +147,15 @@ function noteTrimmed(messages: Message[], size: TranscriptSize, dropped: Message
   const files = new Set<string>();
   let intent = '';
   for (const m of dropped) {
-    if (m.role === 'user' && intent === '') intent = m.content.slice(0, 160);
+    if (m.role === 'user' && intent === '') intent = m.content.slice(0, NOTE_INTENT_CHARS);
     if (m.role === 'assistant') for (const c of m.toolCalls) {
       const p = (c.args as Record<string, unknown>).path;
       if (typeof p === 'string') files.add(p);
     }
   }
   const extra = intent !== '' ? ` Goal was: ${intent}` : '';
-  const flist = files.size > 0 ? ` Files: ${[...files].slice(0, 8).join(', ')}.` : '';
+  const names = [...files].slice(0, 8).join(', ').slice(0, NOTE_FILES_CHARS);
+  const flist = names !== '' ? ` Files: ${names}.` : '';
   const note = `${TRIMMED_NOTE}${extra}${flist}`;
   const head = messages[0];
   if (head?.role === 'system') {

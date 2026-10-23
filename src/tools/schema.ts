@@ -418,7 +418,13 @@ export const validateJsonTool: ToolSpec = {
       let allowed: string;
       try {
         allowed = ctx.permissions.resolvePath(absolute, 'read');
-      } catch {
+      } catch (error) {
+        throw new ToolError(`${label} cannot be read: ${(error as Error).message}`);
+      }
+      // A $ref is a pointer inside a document, not a path the caller typed, so it
+      // stays confined: a hostile schema must not be able to page in files from
+      // elsewhere on the machine. (The file tools themselves are not confined.)
+      if (!ctx.permissions.isInside(allowed)) {
         throw new ToolError(`${label} "${relativePath(ctx.workspace, absolute)}" is outside the workspace`);
       }
       const info = await stat(allowed).catch(() => null);

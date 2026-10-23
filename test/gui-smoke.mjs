@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -9,7 +9,7 @@ import { createMockProvider } from './mock-provider.mjs';
 import { Session } from '../src/session.ts';
 
 const ROOT = resolve(fileURLToPath(new URL('..', import.meta.url)));
-const EXE = join(ROOT, 'VaelenGUI.exe');
+const EXE = join(ROOT, 'RadicalHarness.exe');
 const BUNDLE = join(ROOT, 'dist', 'gui.cjs');
 const useBundle = process.argv.includes('--bundle');
 
@@ -24,6 +24,15 @@ function startGui(cwd, configPath, usagePath, extraArgs = [], extraEnv = {}) {
   }
   env.VAELEN_CONFIG = configPath;
   env.VAELEN_USAGE_FILE = usagePath;
+  // The time ledger needs the same isolation: without it every test run wrote its
+  // turn durations into the real ~/.vaelen/time.jsonl and the lifetime working
+  // time read back as someone else's history.
+  env.VAELEN_TIME_FILE = join(dirname(usagePath), 'time.jsonl');
+  // "Home" is a temp folder so the folder picker's default directory is
+  // predictable and the suite never lists the real home.
+  const home = mkdtempSync(join(tmpdir(), 'radical-home-'));
+  env.USERPROFILE = home;
+  env.HOME = home;
   // The project registry is per user; a test must never write the real one.
   env.VAELEN_WORKSPACES_FILE = join(dirname(configPath), 'workspaces.json');
   Object.assign(env, extraEnv);
@@ -51,7 +60,7 @@ function startGui(cwd, configPath, usagePath, extraArgs = [], extraEnv = {}) {
     });
   });
 
-  return { child, ready, output: () => output };
+  return { child, ready, output: () => output, home };
 }
 
 async function connectEvents(base, token) {
@@ -129,11 +138,11 @@ function stopProcess(child) {
 function api(base, token) {
   const origin = new URL(base).origin;
   return {
-    get: (path) => fetch(new URL(path, origin), { headers: { 'x-vaelen-token': token } }),
+    get: (path) => fetch(new URL(path, origin), { headers: { 'x-radical-token': token } }),
     post: (path, body) =>
       fetch(new URL(path, origin), {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'x-vaelen-token': token },
+        headers: { 'content-type': 'application/json', 'x-radical-token': token },
         body: JSON.stringify(body ?? {}),
       }),
   };
@@ -153,14 +162,14 @@ async function main() {
   }
 
   const { server, port } = await createMockProvider();
-  const workspace = await mkdtemp(join(tmpdir(), 'vaelen-gui-'));
-  const configDir = await mkdtemp(join(tmpdir(), 'vaelen-gui-config-'));
+  const workspace = await mkdtemp(join(tmpdir(), 'radical-gui-'));
+  const configDir = await mkdtemp(join(tmpdir(), 'radical-gui-config-'));
   const configPath = join(configDir, 'config.json');
-  const usageDir = await mkdtemp(join(tmpdir(), 'vaelen-gui-usage-'));
+  const usageDir = await mkdtemp(join(tmpdir(), 'radical-gui-usage-'));
   const usagePath = join(usageDir, 'usage.jsonl');
   // Repository clones and history stay in temp folders, so the test never
   // touches the user's real ~/.vaelen/repos or hits the network.
-  const reposDir = await mkdtemp(join(tmpdir(), 'vaelen-gui-repos-'));
+  const reposDir = await mkdtemp(join(tmpdir(), 'radical-gui-repos-'));
   const reposFile = join(reposDir, 'repos.json');
   const repoEnv = { VAELEN_REPOS_DIR: reposDir, VAELEN_REPOS_FILE: reposFile };
 
@@ -183,7 +192,7 @@ async function main() {
     const page = await client.get('/');
     assert.equal(page.status, 200, 'index should be served');
     const pageHtml = await page.text();
-    assert.match(pageHtml, /Vaelen/, 'index should render the app');
+    assert.match(pageHtml, /Radical/, 'index should render the app');
     assert.match(pageHtml, /\/api\/events/, 'client script should connect to the event stream');
     assert.match(pageHtml, /platform\.deepseek\.com/, 'the key dialog should link to DeepSeek');
     assert.match(pageHtml, /openSettings\(true\)/, 'a missing key should open the dialog automatically');
@@ -193,6 +202,10 @@ async function main() {
     assert.match(pageHtml, /id="context-lifetime"/, 'the top bar should render the lifetime counter');
     assert.match(pageHtml, /id="chat-list"/, 'the sidebar should render the saved chat tabs');
     assert.match(pageHtml, /id="new-chat"/, 'the sidebar should offer a new chat button');
+    assert.match(pageHtml, /id="prompt-bar"/, 'the chat should render the current prompt bar');
+    assert.match(pageHtml, /function setPromptBar/, 'the prompt bar should follow the open chat');
+    assert.match(pageHtml, /liveWorkingMs/, 'lifetime time should sum every running chat');
+    assert.match(pageHtml, /reconcileLiveTurns/, 'the rail should resync which turns are live');
     assert.match(pageHtml, /id="chat-recover"/, 'the sidebar should offer a recover button');
     assert.match(pageHtml, /chat-delete/, 'each tab should render a delete button');
     assert.match(pageHtml, /\/api\/chats\/delete/, 'the delete button should call the delete endpoint');
@@ -203,10 +216,20 @@ async function main() {
     assert.doesNotMatch(pageHtml, /Project folder \(this chat\)/, 'settings should no longer carry its own project field');
     assert.match(pageHtml, /commitWorkspacePath/, 'the header field should be committed on Enter and blur');
     assert.match(pageHtml, /\/api\/workspace/, 'the header field should call the workspace endpoint');
+    assert.match(
+      pageHtml,
+      /approximate target, not a constraint/,
+      'the workspace tooltip should say the folder is a starting point, not a fence',
+    );
     // Every rail row shows its turn status, not just the busy ones.
     assert.match(pageHtml, /head\.className = 'chat-head'/, 'each chat row should have a status line');
     assert.match(pageHtml, /chat-status \$\{state\}/, 'the row should render a status icon for every chat');
     assert.match(pageHtml, /chat\.needsApproval \? 'approval'/, 'approval must outrank working');
+    assert.match(
+      pageHtml,
+      /const viewedBusy = row \? row\.busy === true : busy/,
+      'the composer must follow the rail, not a stale local busy flag',
+    );
     assert.match(pageHtml, /\.chat-status\.working/, 'a working chat should be styled apart');
     assert.match(pageHtml, /prefers-reduced-motion/, 'the pulse should respect reduced motion');
     assert.doesNotMatch(pageHtml, /chat-live/, 'the old busy-only marker should be gone');
@@ -224,6 +247,103 @@ async function main() {
     assert.match(pageHtml, /scroller\.addEventListener\(\s*'scroll'/, 'scrolling should drive the follow flag');
     assert.match(pageHtml, /behavior: 'instant'/, 'auto-scroll must not lag a fast stream');
     assert.match(pageHtml, /id="context-budget"/, 'settings should let the budget be changed');
+
+    // Undo was replaced by a Ctrl+F find bar, which searches the open transcript.
+    assert.match(pageHtml, /id="find-input"/, 'the header should carry a find box');
+    assert.match(pageHtml, /id="find-next"/, 'the find box should step forward');
+    assert.match(pageHtml, /id="find-prev"/, 'the find box should step back');
+    assert.match(pageHtml, /function stepFind\(/, 'the find box should have a matcher');
+    assert.match(pageHtml, /event\.key\.toLowerCase\(\) !== 'f'/, 'Ctrl+F should focus the find box');
+    assert.doesNotMatch(pageHtml, /id="undo"/, 'the Undo button should be gone from the header');
+    assert.doesNotMatch(pageHtml, /projectLabel/, 'chat rows should not print the project folder name');
+    // The live clock arms from the server's turn start, so a swap or reload does
+    // not restart the elapsed working time at zero.
+    assert.match(
+      pageHtml,
+      /startTurnTimer\(typeof event\.turnStartedAt === 'number' \? event\.turnStartedAt : Date\.now\(\)\)/,
+      'the live clock arms from the turn start, not from now',
+    );
+
+    // A chat has no session file until its first message, so pressing + used to
+    // add nothing visible. The rail now stands in for the unsaved chat.
+    assert.match(pageHtml, /title: 'New chat'/, 'the rail should stand in for an unsaved chat');
+    assert.match(
+      pageHtml,
+      /const isActive = chat\.id === '' \? currentChatId === null/,
+      'the unsaved row is the active one while nothing else is open',
+    );
+    assert.match(pageHtml, /if \(chat\.id !== ''\) \{/, 'the unsaved row offers no delete button');
+    assert.match(
+      pageHtml,
+      /if \(chat\.id === ''\) \{\s*\/\/ Already the chat being looked at/,
+      'clicking the unsaved row should not switch to an empty id',
+    );
+
+    // One synchronous scroll stops short of the bottom because layout settles
+    // afterwards; the transcript scrolls again once layout has run.
+    assert.match(
+      pageHtml,
+      /requestAnimationFrame\(\(\) => scrollDown\(false\)\)/,
+      'the transcript scrolls again after layout',
+    );
+    assert.match(
+      pageHtml,
+      /setTimeout\(\(\) => scrollDown\(false\), 90\)/,
+      'and once more after late content such as images',
+    );
+
+
+    // The folder button opens an in-app browser, and the dialog is in the page.
+    assert.match(pageHtml, /id="workspace-pick"/, 'the project field should expose a folder button');
+    assert.match(pageHtml, /aria-label="Browse for a project folder"/, 'the button must be announced');
+    assert.match(pageHtml, /id="folder-picker"/, 'the folder browser dialog should be in the page');
+    assert.match(pageHtml, /id="picker-use"/, 'the dialog should be able to adopt a folder');
+    assert.match(pageHtml, /function loadFolder\(/, 'the dialog should fetch listings from the server');
+    assert.match(pageHtml, /void loadFolder\(''\);/, 'the picker should open in the home folder');
+    assert.match(
+      pageHtml,
+      /workspaceInput\.value = pickerDirectory/,
+      'picking a folder should flow through the same commit path as typing one',
+    );
+
+    // The top bar's formatters are pure functions, so they can be checked exactly.
+    const uiFunction = (name) => {
+      const source = pageHtml.match(new RegExp('function ' + name + '\\([^)]*\\) \\{[\\s\\S]*?\\n      \\}'));
+      assert.ok(source, 'the page should still define ' + name + '()');
+      return new Function(source[0] + '; return ' + name + ';')();
+    };
+    const uiFormatTokens = uiFunction('formatTokens');
+    assert.equal(uiFormatTokens(0), '0', 'no tokens should read as 0');
+    assert.equal(uiFormatTokens(999), '999', 'a small count stays exact');
+    assert.equal(uiFormatTokens(1_000), '1k');
+    assert.equal(uiFormatTokens(1_500), '1.5k');
+    assert.equal(uiFormatTokens(150_000), '150k');
+    assert.equal(uiFormatTokens(999_499), '999k', 'just below a megabyte still reads in k');
+    assert.equal(uiFormatTokens(999_500), '1M', 'a value that rounds to 1M must never read 1000k');
+    assert.equal(uiFormatTokens(1_050_000), '1.1M');
+    assert.equal(uiFormatTokens(999_600_000), '1B', 'the same promotion applies at the gigabyte');
+    assert.equal(uiFormatTokens(-5), '0', 'a negative estimate should not print a minus sign');
+
+    const uiFormatCount = uiFunction('formatCount');
+    assert.equal(uiFormatCount(0), '0');
+    assert.equal(uiFormatCount(999), '999');
+    assert.equal(uiFormatCount(1_000), '1k');
+    assert.equal(uiFormatCount(12_400), '12k', 'the lifetime counter rounds at 10k');
+    assert.equal(uiFormatCount(999_600), '1M', 'the lifetime counter promotes instead of 1000k');
+    assert.equal(uiFormatCount(1_500_000), '1.5M');
+    assert.equal(uiFormatCount(999_600_000), '1B', 'and at the gigabyte');
+    assert.equal(uiFormatCount(Number.NaN), '0', 'a missing total must not print NaN');
+
+    const uiFormatDuration = uiFunction('formatDuration');
+    assert.equal(uiFormatDuration(0), '0s');
+    assert.equal(uiFormatDuration(999), '0s', 'a sub-second turn reads as 0s');
+    assert.equal(uiFormatDuration(1_500), '1s');
+    assert.equal(uiFormatDuration(60_000), '1m 00s', 'seconds are padded once minutes appear');
+    assert.equal(uiFormatDuration(3_599_000), '59m 59s');
+    assert.equal(uiFormatDuration(3_600_000), '1h 0m');
+    assert.equal(uiFormatDuration(7_380_000), '2h 3m');
+    assert.equal(uiFormatDuration(Number.NaN), '0s', 'a missing duration must not print NaN');
+    assert.equal(pageHtml.match(/function formatDuration\(/g).length, 1, 'the helper must be defined once');
 
     const unauthorised = await fetch(new URL('/api/state', base.origin));
     assert.equal(unauthorised.status, 401, 'API should require the token');
@@ -268,15 +388,66 @@ async function main() {
 
     assert.equal(hello.busy, false, 'an idle window must say so');
 
+    // The header's folder button opens an in-app browser, so the listing endpoint
+    // is the real contract: directories only, absolute paths, and a parent link.
+    const noTokenFs = await fetch(new URL('/api/fs/list', base.origin));
+    assert.equal(noTokenFs.status, 401, 'the folder listing must require the token');
+
+    const nested = join(workspace, 'nested');
+    await mkdir(join(nested, 'deeper'), { recursive: true });
+    await mkdir(join(workspace, 'AAA-first'), { recursive: true });
+    await writeFile(join(workspace, 'not-a-folder.txt'), 'x', 'utf8');
+    await mkdir(join(gui.home, 'home-sub'), { recursive: true });
+
+    const homeListing = await (await client.get('/api/fs/list')).json();
+    assert.equal(homeListing.path, gui.home, 'with no path the listing starts in the home folder');
+    assert.ok(
+      homeListing.entries.some((entry) => entry.name === 'home-sub'),
+      'the home folder is really being listed',
+    );
+
+    const topLevel = await (await client.get('/api/fs/list?path=' + encodeURIComponent(workspace))).json();
+    assert.equal(topLevel.path.toLowerCase(), workspace.toLowerCase(), 'an explicit path is honoured');
+    const names = topLevel.entries.map((entry) => entry.name);
+    assert.ok(names.includes('nested'), 'a subfolder should be listed');
+    assert.ok(!names.includes('not-a-folder.txt'), 'files must never be listed as folders');
+    assert.equal(topLevel.parent !== null, true, 'a temp workspace has a parent to climb to');
+    assert.equal(topLevel.truncated, false, 'a small folder is not truncated');
+    const sorted = [...names].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    assert.deepEqual(names, sorted, 'folders are sorted case-insensitively');
+    assert.ok(
+      topLevel.entries.every((entry) => entry.path.toLowerCase().endsWith(entry.name.toLowerCase())),
+      'every entry carries its own absolute path',
+    );
+    assert.ok(Array.isArray(topLevel.roots) && topLevel.roots.length > 0, 'the picker offers shortcuts');
+    assert.ok(
+      topLevel.roots.some((root) => root.path.toLowerCase() === workspace.toLowerCase()),
+      'the current project is offered as a shortcut',
+    );
+
+    const intoNested = await (await client.get('/api/fs/list?path=' + encodeURIComponent(nested))).json();
+    assert.equal(intoNested.path.toLowerCase(), nested.toLowerCase(), 'the listing echoes the folder it read');
+    assert.equal(intoNested.parent.toLowerCase(), workspace.toLowerCase(), 'the parent link is the real parent');
+    assert.deepEqual(intoNested.entries.map((entry) => entry.name), ['deeper'], 'subfolders are listed');
+
+    const notAFolder = await client.get('/api/fs/list?path=' + encodeURIComponent(join(workspace, 'not-a-folder.txt')));
+    assert.equal(notAFolder.status, 400, 'a file is not a folder');
+    const missingFolder = await client.get('/api/fs/list?path=' + encodeURIComponent(join(workspace, 'ghost')));
+    assert.equal(missingFolder.status, 400, 'a missing folder is reported, not crashed on');
+
     const badMode = await client.post('/api/mode', { mode: 'write' });
     assert.equal(badMode.status, 400, 'unknown modes should be rejected');
 
     const badJson = await fetch(new URL('/api/chat', base.origin), {
       method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-vaelen-token': token },
+      headers: { 'content-type': 'application/json', 'x-radical-token': token },
       body: '{not json',
     });
     assert.equal(badJson.status, 400, 'malformed JSON should be a client error, not a crash');
+
+    const tooLong = await client.post('/api/chat', { message: 'x'.repeat(200_001) });
+    assert.equal(tooLong.status, 400, 'an absurdly long prompt is refused');
+    assert.match((await tooLong.json()).error, /too long/, 'and says why');
 
     const badUrl = await client.post('/api/config', { baseUrl: 'not a url' });
     assert.equal(badUrl.status, 400, 'an unusable base URL should be rejected');
@@ -317,6 +488,30 @@ async function main() {
     assert.equal(readUsage.sessionTokens, 3 * 133, 'every read-mode request should be counted');
     assert.equal(readTurn.lifetime.totalTokens, 3 * 133, 'turn-end should carry the lifetime total');
     assert.equal(readTurn.lifetime.sessions, 1, 'this window is one session');
+
+    // Every counter must be internally consistent: these are the numbers the top
+    // bar renders, and they were off by a little.
+    assert.equal(readTurn.lifetime.requests, 3, 'three model requests should be counted');
+    assert.equal(readTurn.lifetime.promptTokens, 3 * 111, 'prompt tokens come from the usage block');
+    assert.equal(readTurn.lifetime.completionTokens, 3 * 22, 'completion tokens come from the usage block');
+    assert.equal(readTurn.lifetime.estimatedRequests, 0, 'reported usage is never counted as estimated');
+    assert.equal(readTurn.lifetime.byModel['mock-model'], 3 * 133, 'per-model totals split by model name');
+    assert.ok(readTurn.lifetime.firstAt, 'the ledger records when it started');
+    assert.ok(readTurn.lifetime.lastAt >= readTurn.lifetime.firstAt, 'lastAt never precedes firstAt');
+    assert.equal(readTurn.sessionRequests, 3, 'the window counts the same requests it billed');
+    assert.equal(
+      readTurn.sessionTokens,
+      readTurn.lifetime.totalTokens,
+      'a single window: session and lifetime token counts agree',
+    );
+
+    // Status: the turn reports its own duration, and the time counters grow with it.
+    assert.equal(typeof readTurn.durationMs, 'number', 'turn-end reports how long the turn took');
+    assert.ok(readTurn.durationMs >= 0, 'a duration is never negative');
+    assert.ok(readTurn.chatTimeMs >= readTurn.durationMs, 'per-chat time accumulates this turn');
+    assert.ok(readTurn.sessionMs >= readTurn.durationMs, 'session working time includes this turn');
+    assert.ok(readTurn.lifetimeMs >= readTurn.sessionMs, 'lifetime time is never below session time');
+    assert.equal(readTurn.lifetimeTurns, 1, 'the first turn is the first entry in the time ledger');
     assert.deepEqual(readTools, ['edit_file', 'bash'], 'write tools must be denied, not hidden from the transcript');
     assert.equal(readResults.length, 2, 'both blocked tool calls should report a result');
     for (const result of readResults) {
@@ -564,6 +759,11 @@ async function main() {
     }
     assert.match(questionText, /Question result: The user answered: feature/);
     assert.equal(questionEnd.reason, 'complete');
+    const clearedRail = await (await client.get('/api/chats')).json();
+    const clearedRow = clearedRail.chats.find((chat) => chat.id === questionChat);
+    assert.ok(clearedRow, 'the finished chat is still listed on the rail');
+    assert.equal(clearedRow.busy, false, 'a finished turn must not stay marked working');
+    assert.equal(clearedRow.needsApproval, false, 'answering a question must clear the waiting state');
 
     const budgetChange = await client.post('/api/config', { contextBudget: 250_000 });
     assert.equal(budgetChange.status, 200, 'a context budget should be accepted');
@@ -598,6 +798,13 @@ async function main() {
     assert.equal(approval.kind, 'bash');
     assert.match(approval.target, /rm hello\.txt/);
 
+    // The turn is parked on this card right now. Hold it open long enough to be
+    // measurable, then check the reported duration excludes the wait.
+    const waitedStartedAt = Date.now();
+    await new Promise((done) => setTimeout(done, 1_400));
+    const waitedMs = Date.now() - waitedStartedAt;
+    assert.ok(waitedMs >= 1_300, 'the card really was held open');
+
     const clearWhileBusy = await client.post('/api/clear', {});
     assert.equal(clearWhileBusy.status, 409, 'clearing the viewed chat mid-turn must be refused');
     const runningChatId = (await (await client.get('/api/state')).json()).activeChatId;
@@ -616,6 +823,20 @@ async function main() {
     await events.next((event) => event.type === 'text');
     const deniedTurn = await events.next((event) => event.type === 'turn-end');
     assert.equal(deniedTurn.reason, 'complete');
+    assert.equal(
+      deniedTurn.chats,
+      undefined,
+      'turn-end must not carry a stale rail snapshot (the follow-up chats event is authoritative)',
+    );
+    assert.equal(
+      deniedTurn.durationMs < waitedMs - 400,
+      true,
+      'waiting on an approval card is not working time (duration ' +
+        deniedTurn.durationMs +
+        'ms vs ' +
+        waitedMs +
+        'ms held)',
+    );
 
     const survived = await stat(join(workspace, 'hello.txt'))
       .then(() => true)
@@ -752,7 +973,7 @@ async function main() {
     // Two chats, two projects: each keeps its own folder, its own session file, and
     // its own transcript. This is the per-chat project contract, not one workspace
     // per process.
-    secondWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-gui-switch-'));
+    secondWorkspace = await mkdtemp(join(tmpdir(), 'radical-gui-switch-'));
     const projectA = await client.post('/api/chats', {});
     assert.equal(projectA.status, 200);
     const projChatAId = (await projectA.json()).id;
@@ -923,6 +1144,30 @@ async function main() {
       1,
       'only sessions that recorded tokens are counted; the new window has not sent one yet',
     );
+
+    // The time side of the stats has to survive the restart as well, and each
+    // chat must come back with its own accumulated working time instead of 0.
+    assert.equal(state2.lifetimeMs, beforeRestart2.lifetimeMs, 'lifetime working time survives a restart');
+    assert.equal(
+      state2.lifetimeTurns,
+      beforeRestart2.lifetimeTurns,
+      'the time ledger keeps its turn count across a restart',
+    );
+    assert.ok(state2.lifetimeTurns >= 1, 'the turns this suite ran are on the ledger');
+    assert.ok(state2.sessionMs >= 0, 'a fresh process starts its own session clock at zero');
+    assert.ok(
+      state2.sessionMs <= state2.lifetimeMs,
+      'a process session can never hold more time than the lifetime ledger',
+    );
+    const revived = state2.chats.find((chat) => chat.id === savedChatId);
+    assert.ok(revived, 'the first chat is still listed after the restart');
+    assert.ok(revived.timeMs > 0, 'a reopened chat resumes its working time instead of resetting to zero');
+    assert.ok(
+      state2.chats.every((chat) => typeof chat.timeMs === 'number' && chat.timeMs >= 0),
+      'every restored chat carries a non-negative time',
+    );
+    assert.equal(state2.maxSteps, 250, 'the saved step limit survives the restart');
+    assert.equal(state2.busy, false, 'a restarted window is idle');
     const repos2 = await (await client2.get('/api/repos')).json();
     assert.equal(repos2.repo, null, 'a restart always begins with no repository');
     assert.equal(repos2.history.length, 1, 'the repository history survives a restart');
@@ -1027,6 +1272,84 @@ async function main() {
       'the failed prompt must not be replayed to the model on the next turn',
     );
     assert.equal((await client2.post('/api/config', { model: 'mock-model-2' })).status, 200);
+
+    // A chat's project is its own, so an unrelated running turn must not block a
+    // switch. This guard used to be process-wide (anyBusy), which refused the
+    // change even though only the target chat's transcript is reset.
+    const wsFolder = await mkdtemp(join(tmpdir(), 'radical-switch-'));
+    await client2.post('/api/chats', {});
+    const wsIdleSend = await client2.post('/api/chat', { message: 'idle chat' });
+    assert.equal(wsIdleSend.status, 202, 'the chat that will be switched starts a turn');
+    const wsIdleChat = (await wsIdleSend.json()).chatId;
+    assert.ok(wsIdleChat, 'the switched chat needs an id to be addressed by id');
+    await events2.next((event) => event.type === 'turn-end' && event.chatId === wsIdleChat);
+
+    // A model that never answers holds the other chat busy without a race.
+    assert.equal((await client2.post('/api/config', { model: 'mock-hang' })).status, 200);
+    await client2.post('/api/chats', {});
+    const wsHangSend = await client2.post('/api/chat', { message: 'hang here' });
+    assert.equal(wsHangSend.status, 202, 'the second chat starts a turn that will not finish');
+    const wsHangChat = (await wsHangSend.json()).chatId;
+    assert.notEqual(wsHangChat, wsIdleChat, 'the two chats are different transcripts');
+    const hangingState = await (await client2.get('/api/state')).json();
+    assert.equal(hangingState.busy, true, 'the hanging chat is busy while the switch happens');
+    const hangingRow = hangingState.chats.find((chat) => chat.id === wsHangChat);
+    assert.ok(hangingRow, 'the rail lists the running chat');
+    assert.equal(
+      typeof hangingRow.turnStartedAt,
+      'number',
+      'a busy rail row carries its turn start so concurrent clocks can stack',
+    );
+
+    // The working clock survives a chat swap: swapping away and back must resume
+    // the same start time, not restart the elapsed working time at zero.
+    const busySnapshot = await client2.post('/api/chats/switch', { id: wsHangChat });
+    assert.equal(busySnapshot.status, 200, 'switching back to the running chat works');
+    const backToBusy = await events2.next((event) => event.type === 'chat' && event.id === wsHangChat);
+    assert.equal(backToBusy.busy, true, 'the swapped-in chat reports its running turn');
+    assert.equal(typeof backToBusy.turnStartedAt, 'number', 'a running turn reports when it started');
+    const firstStart = backToBusy.turnStartedAt;
+    assert.ok(firstStart <= Date.now(), 'the start time is in the past');
+    assert.ok(Date.now() - firstStart >= 0, 'and the elapsed time is measurable');
+
+    await client2.post('/api/chats/switch', { id: wsIdleChat });
+    await events2.next((event) => event.type === 'chat' && event.id === wsIdleChat);
+    await client2.post('/api/chats/switch', { id: wsHangChat });
+    const secondLook = await events2.next((event) => event.type === 'chat' && event.id === wsHangChat);
+    assert.equal(
+      secondLook.turnStartedAt,
+      firstStart,
+      'the working clock survives a chat swap instead of resetting',
+    );
+
+    // The behaviour under test: switching an unrelated, idle chat is allowed.
+    const wsSwitch = await client2.post('/api/workspace', { path: wsFolder, chatId: wsIdleChat });
+    assert.equal(wsSwitch.status, 200, 'an idle chat can change project while another turn runs');
+    assert.equal(
+      (await wsSwitch.json()).workspace.toLowerCase(),
+      wsFolder.toLowerCase(),
+      'the switch applies to the chat it named',
+    );
+
+    // The running turn must be untouched by a change to a different chat.
+    const wsMid = await (await client2.get('/api/state')).json();
+    assert.equal(
+      wsMid.chats.find((chat) => chat.id === wsHangChat)?.busy,
+      true,
+      'the unrelated turn keeps running through the switch',
+    );
+
+    // The guard that matters is per chat: its own transcript would be reset.
+    const wsBusySwitch = await client2.post('/api/workspace', { path: workspace, chatId: wsHangChat });
+    assert.equal(wsBusySwitch.status, 409, 'a chat cannot change folder during its own turn');
+    assert.match((await wsBusySwitch.json()).error, /its turn is running/);
+
+    // Clearing the hanging turn leaves the model as the suite found it.
+    assert.equal((await client2.post('/api/abort', { chatId: wsHangChat })).status, 200, 'the hanging turn can be stopped');
+    const wsAbortEnd = await events2.next((event) => event.type === 'turn-end' && event.chatId === wsHangChat);
+    assert.equal(wsAbortEnd.reason, 'aborted', 'the aborted turn reports the interruption');
+    assert.equal((await client2.post('/api/config', { model: 'mock-model-2' })).status, 200);
+    await rm(wsFolder, { recursive: true, force: true });
 
     await events2.close();
     console.log(`gui-smoke: all assertions passed (${useBundle ? 'bundle' : 'exe'})`);

@@ -79,6 +79,66 @@ export class Session {
     }
   }
 
+  /**
+   * Messages and recorded working time from a single read.
+   *
+   * The rail needs both for every transcript whose file changed, and doing it in
+   * two passes meant reading (and JSON-parsing) a multi-megabyte log twice.
+   */
+  static loadWithTime(path: string): { messages: Message[]; timeMs: number } {
+    const MAX_SESSION_BYTES = 20_000_000;
+    let raw: string;
+    try {
+      if (statSync(path).size > MAX_SESSION_BYTES) return { messages: [], timeMs: 0 };
+      raw = readFileSync(path, 'utf8');
+    } catch {
+      return { messages: [], timeMs: 0 };
+    }
+    const messages: Message[] = [];
+    let timeMs = 0;
+    for (const line of raw.split(/\r?\n/)) {
+      if (line.trim() === '') continue;
+      try {
+        const event = JSON.parse(line) as { type?: string; message?: Message; ms?: number };
+        if (event.type === 'clear') messages.length = 0;
+        else if (event.type === 'retract') messages.pop();
+        else if (event.type === 'message' && event.message) messages.push(event.message);
+        else if (event.type === 'time' && typeof event.ms === 'number' && Number.isFinite(event.ms) && event.ms > 0) {
+          timeMs += Math.floor(event.ms);
+        }
+      } catch {
+        // Skip corrupt lines instead of losing the whole transcript.
+      }
+    }
+    return { messages, timeMs };
+  }
+
+  static timeMs(path: string): number {
+    // Working time recorded for this transcript, summed from its `time` events.
+    const MAX_SESSION_BYTES = 20_000_000;
+    let total = 0;
+    try {
+      if (statSync(path).size > MAX_SESSION_BYTES) return 0;
+      const raw = readFileSync(path, 'utf8');
+      for (const line of raw.split(/\r?\n/)) {
+        if (line.trim() === '') continue;
+        try {
+          const event = JSON.parse(line) as { type?: string; ms?: number };
+          if (event.type !== 'time') continue;
+          // Never trust a hand-edited log: only a finite, positive duration counts.
+          if (typeof event.ms === 'number' && Number.isFinite(event.ms) && event.ms > 0) {
+            total += Math.floor(event.ms);
+          }
+        } catch {
+          // Skip corrupt lines instead of dropping the whole total.
+        }
+      }
+    } catch {
+      return total;
+    }
+    return total;
+  }
+
   /** Records a `/clear` so resuming the log does not replay discarded turns. */
   markCleared(): void {
     this.appendEvent({ type: 'clear' });

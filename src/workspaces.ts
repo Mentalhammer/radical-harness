@@ -58,13 +58,6 @@ export function recordWorkspace(path: string): string[] {
   return list;
 }
 
-export function forgetWorkspace(path: string): string[] {
-  const key = resolve(path).toLowerCase();
-  const list = loadWorkspaces().filter((item) => item.toLowerCase() !== key);
-  save(list);
-  return list;
-}
-
 /** Every transcript folder the window should look in. */
 export function sessionDirFor(workspace: string): string {
   return join(workspace, '.vaelen', 'sessions');

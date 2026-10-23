@@ -1,7 +1,7 @@
 import { mkdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import type { ToolSpec } from '../types.ts';
-import { optionalBoolean, requiredString, ToolError, truncate, unifiedDiff } from './util.ts';
+import { filesystemError, optionalBoolean, requiredString, ToolError, truncate, unifiedDiff } from './util.ts';
 
 /**
  * A compact patch format: one header per file, then `@@` hunks with ` ` / `-` /
@@ -167,8 +167,12 @@ export const applyPatchTool: ToolSpec = {
         const content = operation.lines.length === 0 ? '' : `${operation.lines.join('\n')}\n`;
         if (!dryRun) {
           ctx.checkpoints?.snapshot(absolute);
-          await mkdir(dirname(absolute), { recursive: true });
-          await writeFile(absolute, content, 'utf8');
+          try {
+            await mkdir(dirname(absolute), { recursive: true });
+            await writeFile(absolute, content, 'utf8');
+          } catch (error) {
+            throw filesystemError(`Could not add ${operation.path}`, error);
+          }
         }
         summary.push(`${dryRun ? 'Would add' : 'Added'} ${operation.path} (${operation.lines.length} lines)`);
         continue;
@@ -179,7 +183,11 @@ export const applyPatchTool: ToolSpec = {
         if (!info || !info.isFile()) throw new ToolError(`File not found: ${operation.path}`);
         if (!dryRun) {
           ctx.checkpoints?.snapshot(absolute);
-          await unlink(absolute);
+          try {
+            await unlink(absolute);
+          } catch (error) {
+            throw filesystemError(`Could not delete ${operation.path}`, error);
+          }
         }
         summary.push(`${dryRun ? 'Would delete' : 'Deleted'} ${operation.path}`);
         continue;
@@ -195,7 +203,11 @@ export const applyPatchTool: ToolSpec = {
       const preview = truncate(unifiedDiff(original, output, 60), 4000);
       if (!dryRun) {
         ctx.checkpoints?.snapshot(absolute);
-        await writeFile(absolute, output, 'utf8');
+        try {
+          await writeFile(absolute, output, 'utf8');
+        } catch (error) {
+          throw filesystemError(`Could not write ${operation.path}`, error);
+        }
       }
       summary.push(
         `${dryRun ? 'Would update' : 'Updated'} ${operation.path} (${applied} hunk(s), ${before} → ${after} lines)\n${preview}`,

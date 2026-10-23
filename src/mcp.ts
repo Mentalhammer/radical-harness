@@ -243,7 +243,7 @@ export class McpClient {
         {
           protocolVersion: '2024-11-05',
           capabilities: {},
-          clientInfo: { name: 'vaelen', version: '0.1.0' },
+          clientInfo: { name: 'radical', version: '0.1.0' },
         },
         timeout,
       );

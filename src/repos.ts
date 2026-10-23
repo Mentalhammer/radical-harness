@@ -25,6 +25,14 @@ export interface RemoteRepo extends RepoRef {
   updatedAt: string;
 }
 
+export interface RemoteRepoList {
+  ok: boolean;
+  repos: RemoteRepo[];
+  error?: string;
+  /** More repositories exist than were returned (the list is capped). */
+  truncated?: boolean;
+}
+
 export interface CloneResult {
   ok: boolean;
   path: string;
@@ -35,6 +43,8 @@ export interface CloneResult {
 const NAME = /^[A-Za-z0-9](?:[A-Za-z0-9._-]{0,98})$/;
 const MAX_HISTORY = 30;
 const CLONE_TIMEOUT_MS = 300_000;
+/** Rendering thousands of rows helps nobody; the newest 500 are kept. */
+const MAX_REMOTE_REPOS = 500;
 
 /** Where clones live; overridable so tests never touch the real folder. */
 export function reposDirectory(): string {
@@ -165,36 +175,108 @@ export async function ghStatus(): Promise<GhStatus> {
 }
 
 /** The signed-in user's repositories, for the "my repositories" picker. */
-export async function listOwnRepos(): Promise<{ ok: boolean; repos: RemoteRepo[]; error?: string }> {
-  const status = await ghStatus();
-  if (!status.installed) return { ok: false, repos: [], error: 'GitHub CLI (gh) is not installed' };
-  if (!status.authenticated) return { ok: false, repos: [], error: 'GitHub CLI is not signed in — run: gh auth login' };
+/**
+ * The gh call behind the repository picker.
+ *
+ * `gh repo list` only covers repositories the account *owns* and stops at
+ * `--limit` (30 by default, 50 here), so a collaborator's repository or an
+ * organisation's repository never appeared. The REST endpoint takes every
+ * affiliation and `--paginate` walks all pages, so nothing is silently cut off.
+ */
+export function reposListArgs(): string[] {
+  return [
+    'api',
+    '--paginate',
+    'user/repos?per_page=100&affiliation=owner,collaborator,organization_member&sort=updated',
+    '--jq',
+    '.[] | {nameWithOwner: .full_name, visibility: .visibility, updatedAt: .updated_at}',
+  ];
+}
 
-  const list = await run(
-    'gh',
-    ['repo', 'list', '--limit', '50', '--json', 'nameWithOwner,visibility,updatedAt'],
-    20_000,
-  );
-  if (list.code !== 0) {
-    return { ok: false, repos: [], error: list.stderr.trim() || 'Could not list repositories' };
+/** Internal repositories are not public either, so both count as private here. */
+function normalizeVisibility(value: unknown): 'public' | 'private' {
+  const text = typeof value === 'string' ? value.toLowerCase() : '';
+  return text === 'private' || text === 'internal' ? 'private' : 'public';
+}
+
+/**
+ * Parses the JSONL that `gh api --jq` emits. Duplicates are dropped (pagination
+ * can overlap when repositories are updated mid-walk) and the result is newest
+ * first, which is the order the picker shows.
+ */
+export function parseRepoApiList(stdout: string): RemoteRepo[] {
+  const seen = new Set<string>();
+  const repos: RemoteRepo[] = [];
+  for (const line of stdout.split(/\r?\n/)) {
+    if (line.trim() === '') continue;
+    let item: Record<string, unknown>;
+    try {
+      const parsed: unknown = JSON.parse(line);
+      if (typeof parsed !== 'object' || parsed === null) continue;
+      item = parsed as Record<string, unknown>;
+    } catch {
+      continue; // a torn line must not hide the rest of the list
+    }
+    const repo = parseRepo(item.nameWithOwner);
+    if (!repo) continue;
+    const key = `${repo.owner.toLowerCase()}/${repo.name.toLowerCase()}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    repos.push({
+      ...repo,
+      visibility: normalizeVisibility(item.visibility),
+      updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
+    });
   }
+  return repos.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
 
+/** The older `gh repo list --json` shape, used when the API call is unavailable. */
+function parseRepoListJson(stdout: string): RemoteRepo[] | null {
   try {
-    const parsed = JSON.parse(list.stdout) as Array<Record<string, unknown>>;
+    const parsed = JSON.parse(stdout) as Array<Record<string, unknown>>;
     const repos: RemoteRepo[] = [];
     for (const item of parsed) {
       const repo = parseRepo(item.nameWithOwner);
       if (!repo) continue;
       repos.push({
         ...repo,
-        visibility: typeof item.visibility === 'string' ? item.visibility : 'public',
+        visibility: normalizeVisibility(item.visibility),
         updatedAt: typeof item.updatedAt === 'string' ? item.updatedAt : '',
       });
     }
-    return { ok: true, repos };
+    return repos;
   } catch {
-    return { ok: false, repos: [], error: 'GitHub returned an unreadable repository list' };
+    return null;
   }
+}
+
+export async function listOwnRepos(): Promise<RemoteRepoList> {
+  const status = await ghStatus();
+  if (!status.installed) return { ok: false, repos: [], error: 'GitHub CLI (gh) is not installed' };
+  if (!status.authenticated) return { ok: false, repos: [], error: 'GitHub CLI is not signed in — run: gh auth login' };
+
+  const listed = await run('gh', reposListArgs(), 60_000);
+  let repos = listed.code === 0 ? parseRepoApiList(listed.stdout) : [];
+
+  if (listed.code !== 0 || repos.length === 0) {
+    // An older gh, or a token without the user scope: fall back to the plain
+    // list, which at least covers owned repositories instead of showing nothing.
+    const fallback = await run(
+      'gh',
+      ['repo', 'list', '--limit', '1000', '--json', 'nameWithOwner,visibility,updatedAt'],
+      30_000,
+    );
+    if (fallback.code !== 0) {
+      return { ok: false, repos: [], error: (listed.stderr || fallback.stderr).trim() || 'Could not list repositories' };
+    }
+    const parsed = parseRepoListJson(fallback.stdout);
+    if (parsed === null) return { ok: false, repos: [], error: 'GitHub returned an unreadable repository list' };
+    repos = parsed;
+  }
+
+  const truncated = repos.length > MAX_REMOTE_REPOS;
+  return { ok: true, repos: truncated ? repos.slice(0, MAX_REMOTE_REPOS) : repos, truncated };
 }
 
 /**

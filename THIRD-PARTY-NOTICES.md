@@ -1,10 +1,10 @@
 # Third-party notices
 
-Vaelen itself is MIT-licensed (see [LICENSE](LICENSE)). It has **no runtime npm dependencies**: the CLI uses only Node.js built-ins, and the window is a single HTML file.
+Radical itself is MIT-licensed (see [LICENSE](LICENSE)). It has **no runtime npm dependencies**: the CLI uses only Node.js built-ins, and the window is a single HTML file.
 
 The Windows executable does redistribute a runtime, so its licence travels with it.
 
-## Redistributed in `VaelenGUI.exe`
+## Redistributed in `RadicalHarness.exe`
 
 The build copies the Node.js binary and injects the bundled GUI into it (Node SEA + postject), so the resulting executable contains:
 
@@ -47,4 +47,4 @@ These are installed with `npm install` and are **not** part of the shipped execu
 
 ## Providers
 
-Vaelen talks to whatever OpenAI-compatible endpoint you point it at (DeepSeek by default). That traffic, and the terms attached to it, are between you and the provider.
+Radical talks to whatever OpenAI-compatible endpoint you point it at (DeepSeek by default). That traffic, and the terms attached to it, are between you and the provider.

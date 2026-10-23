@@ -10,6 +10,7 @@ import {
   renameSync,
   statSync,
   writeFileSync,
+  type Dirent,
 } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join, relative, resolve } from 'node:path';
@@ -45,7 +46,6 @@ import {
   parseRepo,
   recordRepo,
   repoLabel,
-  repoPath,
   type RepoRef,
 } from '../repos.ts';
 import type { Ui } from '../render.ts';
@@ -62,6 +62,13 @@ const MAX_IMAGE_BYTES = 8_000_000;
 const MAX_TEXT_CHARS = 1_000_000;
 const MAX_TOTAL_BYTES = 12_000_000;
 const MAX_CONTEXT_BUDGET = 10_000_000;
+/** A prompt beyond this is a paste accident, not a request. */
+const MAX_MESSAGE_CHARS = 200_000;
+/** Keys and endpoints are short; anything longer is garbage written to disk. */
+const MAX_KEY_CHARS = 4_096;
+const MAX_PATH_CHARS = 4_096;
+/** The folder picker stops listing here so one huge directory cannot stall the window. */
+const MAX_FS_ENTRIES = 500;
 // A stable origin keeps the browser's localStorage (and the saved API key) across launches.
 const DEFAULT_PORT = 47821;
 
@@ -242,10 +249,10 @@ function parseArgs(argv: string[]): GuiArgs {
 }
 
 function printHelp(): void {
-  say(`Vaelen GUI ${VERSION} — standalone window for the harness.
+  say(`Radical GUI ${VERSION} — standalone window for the harness.
 
 Usage:
-  vaelen-gui [options]
+  radical-gui [options]
 
 Options:
   -C, --workspace <dir>   Project root (default: current directory)
@@ -285,6 +292,10 @@ class Hub {
 
   add(client: ServerResponse): void {
     this.#clients.add(client);
+    // Write failures are only half the story: a socket can also emit 'error'
+    // asynchronously after the client went away. Drop it here so one dead window
+    // neither crashes the process nor stays in the broadcast set forever.
+    client.on('error', () => this.#clients.delete(client));
   }
 
   remove(client: ServerResponse): void {
@@ -292,12 +303,25 @@ class Hub {
   }
 
   send(client: ServerResponse, event: Record<string, unknown>): void {
-    client.write(`data: ${JSON.stringify(event)}\n\n`);
+    this.#write(client, `data: ${JSON.stringify(event)}\n\n`);
   }
 
   broadcast(event: Record<string, unknown>): void {
     const frame = `data: ${JSON.stringify(event)}\n\n`;
-    for (const client of this.#clients) client.write(frame);
+    for (const client of this.#clients) this.#write(client, frame);
+  }
+
+  /**
+   * A socket that died between the last event and this one throws on write.
+   * One dead window must never stop the others from receiving the update, or
+   * their rail would keep showing a turn that already ended.
+   */
+  #write(client: ServerResponse, frame: string): void {
+    try {
+      client.write(frame);
+    } catch {
+      this.#clients.delete(client);
+    }
   }
 }
 
@@ -417,6 +441,7 @@ async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> 
 function detectImageMime(data: Buffer): string | undefined {
   const ascii = (start: number, end: number): string => data.subarray(start, end).toString('ascii');
   if (data.length >= 8 && data.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) {
+    // do not delete this is a high level edit no human edits in this code allowed thanks for reading me
     return 'image/png';
   }
   if (data.length >= 3 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff) return 'image/jpeg';
@@ -461,6 +486,45 @@ function json(res: ServerResponse, status: number, payload: unknown): void {
 function defaultWorkspace(): string {
   const packaged = !/^node(\.exe)?$/i.test(basename(process.execPath));
   return packaged ? dirname(process.execPath) : process.cwd();
+}
+
+/**
+ * Places the folder picker can jump to: the chat's own project, the home folder,
+ * and (on Windows) every drive that exists. Duplicates are dropped so a project
+ * opened from the home folder does not appear twice.
+ */
+function folderRoots(workspace: string): { name: string; path: string }[] {
+  const roots: { name: string; path: string }[] = [];
+  const seen = new Set<string>();
+  const add = (name: string, path: string): void => {
+    if (path === '') return;
+    const key = path.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    roots.push({ name, path });
+  };
+  if (workspace !== '') add(basename(workspace) || workspace, workspace);
+  add('Home', homedir());
+  if (process.platform === 'win32') {
+    for (const letter of 'ABCDEFGHIJKLMNOPQRSTUVWXYZ') {
+      const drive = `${letter}:\\`;
+      if (existsSync(drive)) add(`${letter}:`, drive);
+    }
+  } else {
+    add('/', '/');
+  }
+  return roots;
+}
+
+/** A junction or symlink pointing at a directory is still a folder worth opening. */
+function isDirectoryEntry(dir: string, dirent: Dirent): boolean {
+  if (dirent.isDirectory()) return true;
+  if (!dirent.isSymbolicLink()) return false;
+  try {
+    return statSync(join(dir, dirent.name), { throwIfNoEntry: false })?.isDirectory() === true;
+  } catch {
+    return false;
+  }
 }
 
 /** Chromium binaries that can host a chromeless app window, most likely first. */
@@ -608,6 +672,12 @@ async function main(): Promise<void> {
     home: string;
     busy: boolean;
     timeMs: number;
+    /** Wall time this turn spent waiting on the user, which is not working time. */
+    blockedMs: number;
+    /** When a card was opened, or null when the turn is not blocked on the user. */
+    blockedSince: number | null;
+    /** When the running turn began, so a window that swaps back keeps its clock. */
+    turnStartedAt: number | null;
     controller?: AbortController;
     steering: string[];
     /** Assistant text streamed but not yet committed to a message, for reattaching. */
@@ -686,6 +756,9 @@ async function main(): Promise<void> {
       home: folder,
       busy: false,
       timeMs: 0,
+      blockedMs: 0,
+      blockedSince: null,
+      turnStartedAt: null,
       steering: [],
       partial: '',
       approvals: new Map(),
@@ -694,6 +767,18 @@ async function main(): Promise<void> {
     };
     chat.permissions = buildPermissions(chat);
     return chat;
+  }
+
+  /**
+   * Time the turn actually spent working.
+   *
+   * Wall-clock from turn start to now includes every minute parked on an approval
+   * or question card, and a stalled provider request, which made the "working"
+   * counters grow while the window sat idle. Time blocked on the user is removed.
+   */
+  function activeTurnMs(chat: Chat, startedAt: number): number {
+    const waiting = chat.blockedSince === null ? 0 : Math.max(0, Date.now() - chat.blockedSince);
+    return Math.max(0, Date.now() - startedAt - chat.blockedMs - waiting);
   }
 
   /** The process config with this chat's project folded in. */
@@ -745,6 +830,8 @@ async function main(): Promise<void> {
       settle = resolve;
     });
     chat.approvals.set(id, { settle, kind: request.kind, target: request.target });
+    // Parked on the user: this stretch must not count as working time.
+    chat.blockedSince = Date.now();
     hub.broadcast({
       type: 'approval',
       id,
@@ -763,6 +850,10 @@ async function main(): Promise<void> {
     const result = await decision;
     chat.approvals.delete(id);
     clearTimeout(timer);
+    if (chat.blockedSince !== null) {
+      chat.blockedMs += Math.max(0, Date.now() - chat.blockedSince);
+      chat.blockedSince = null;
+    }
     hub.broadcast({ type: 'chats', ...chatState() });
     return result;
   }
@@ -774,6 +865,7 @@ async function main(): Promise<void> {
       settle = resolve;
     });
     chat.questions.set(id, { settle, question: request.question, options: request.options });
+    chat.blockedSince = Date.now();
     hub.broadcast({
       type: 'question',
       id,
@@ -793,6 +885,10 @@ async function main(): Promise<void> {
     const result = await answer;
     chat.questions.delete(id);
     clearTimeout(timer);
+    if (chat.blockedSince !== null) {
+      chat.blockedMs += Math.max(0, Date.now() - chat.blockedSince);
+      chat.blockedSince = null;
+    }
     hub.broadcast({ type: 'chats', ...chatState() });
     return result;
   }
@@ -851,6 +947,8 @@ async function main(): Promise<void> {
     busy: boolean;
     /** The turn is blocked on a permission card the user has not answered. */
     needsApproval: boolean;
+    /** When the running turn began, so the window can stack concurrent clocks. */
+    turnStartedAt: number | null;
   }
 
   /** A chat is titled after its first prompt; the file itself stays the source of truth. */
@@ -873,7 +971,7 @@ async function main(): Promise<void> {
    */
   const summaryCache = new Map<
     string,
-    { stamp: string; summary: Omit<ChatSummary, 'busy' | 'needsApproval'> }
+    { stamp: string; summary: Omit<ChatSummary, 'busy' | 'needsApproval' | 'turnStartedAt'> }
   >();
 
   /**
@@ -982,8 +1080,11 @@ async function main(): Promise<void> {
         let cached = summaryCache.get(key);
         if (cached?.stamp !== stamp) {
           let loaded: Message[] = [];
+          let timeMs = 0;
           try {
-            loaded = Session.load(path).filter((message) => message.role !== 'system');
+            const parsed = Session.loadWithTime(path);
+            loaded = parsed.messages.filter((message) => message.role !== 'system');
+            timeMs = parsed.timeMs;
           } catch {
             summaryCache.delete(key);
             continue;
@@ -1000,6 +1101,9 @@ async function main(): Promise<void> {
               updatedAt: info.mtime.toISOString(),
               messages: loaded.length,
               workspace: folder,
+              // Summed from the transcript's own `time` events, so the rail still
+              // shows a chat's working time after a restart.
+              timeMs,
             },
           };
           summaryCache.set(key, cached);
@@ -1013,9 +1117,10 @@ async function main(): Promise<void> {
         const live = chats.get(id);
         summaries.push({
           ...cached.summary,
-          timeMs: live?.timeMs ?? 0,
+          timeMs: live?.timeMs ?? cached.summary.timeMs ?? 0,
           busy: live?.busy === true,
           needsApproval: (live?.approvals.size ?? 0) > 0 || (live?.questions.size ?? 0) > 0,
+          turnStartedAt: live?.turnStartedAt ?? null,
         });
       }
     }
@@ -1109,6 +1214,9 @@ async function main(): Promise<void> {
       })),
       pendingQuestions: pendingQuestions(chat),
       chatTimeMs: chat.timeMs,
+      // A swapped-in window arms its live clock from this, not from "now", so the
+      // working time continues instead of restarting.
+      turnStartedAt: chat.turnStartedAt,
       workspace: chat.workspace,
       repo: chat.repo,
       ...usage(chat),
@@ -1249,6 +1357,8 @@ async function main(): Promise<void> {
     // The transcript's own folder decides which project the chat belongs to.
     const chat = createChat(workspace);
     chat.id = id;
+    // A reopened chat resumes its accumulated working time instead of a fresh zero.
+    chat.timeMs = Session.timeMs(path);
     chat.messages.push(...loaded);
     try {
       chat.session = Session.open(path);
@@ -1409,14 +1519,6 @@ async function main(): Promise<void> {
   recordWorkspace(config.workspace);
   restoreLatestChat();
 
-  /** Interrupts every chat's turn; used before a workspace or repository change. */
-  function stopAllChats(): void {
-    for (const chat of new Set([activeChat, ...chats.values()])) {
-      chat.controller?.abort();
-      denyPending(chat);
-    }
-  }
-
   /**
    * Points one chat at another project. Only that chat is affected: its
    * transcript starts over in the new folder, and every other chat keeps its own
@@ -1449,85 +1551,119 @@ async function main(): Promise<void> {
   ): Promise<void> {
     if (chat.busy) return;
     chat.busy = true;
-    // Refresh the prompt so edits to AGENTS.md (and newly registered MCP tools)
-    // apply from the next message, not the next launch.
-    chat.messages[0] = { role: 'system', content: buildSystemPrompt(chat.workspace, config.readOnly, config.reviewMode, config.allowQuestions) };
-    const chatSession = ensureSession(chat);
-    // A pasted key is stopped at the door: it never enters the transcript, the
-    // request, or the echo the window renders.
-    const safeText = redactSecrets(text);
-    const userMessage: UserMessage = { role: 'user', content: safeText };
-    if (attachments.length > 0) userMessage.attachments = attachments;
-    chat.messages.push(userMessage);
-    chatSession?.append(userMessage);
-    hub.broadcast({
-      type: 'user',
-      chatId: chat.id,
-      requestId,
-      text: safeText,
-      attachments: attachments.map(({ id, name, kind, mime, size }) => ({ id, name, kind, mime, size })),
-    });
-    // The first message of a new chat creates its file; every turn refreshes the
-    // rail, because the title and timestamp come from the transcript.
-    hub.broadcast({ type: 'chats', ...chatState() });
-
-    const controller = new AbortController();
-    chat.controller = controller;
-    const chatUi = new ChatUi(hub, chat);
-    const turnStartedAt = Date.now();
-    hub.broadcast({ type: 'turn-start', chatId: chat.id, startedAt: turnStartedAt, ...usage(chat) });
-
+    let userMessage: UserMessage | undefined;
+    // Everything below runs inside one try/finally: if setup fails (a dead
+    // client, a session that cannot be opened), the turn must still be cleared.
+    // A busy flag that never resets would paint the rail "working" forever,
+    // with no turn behind it.
     try {
-      const runOptions = {
-        // The agent gets this chat's project, so tools, checks, and checkpoints
-        // all resolve inside the folder the chat belongs to.
-        config: chatConfig(chat),
-        permissions: chat.permissions,
-        messages: chat.messages,
-        ui: chatUi,
-        session: chatSession,
-        signal: controller.signal,
-        onUsage: (usage: TokenUsage) => onUsage(usage, chat),
-        steering: { drain: () => chat.steering.splice(0) },
-        ask: (request: QuestionRequest) => questionHandler(chat, request),
-      };
-      let reason = await runAgent(runOptions);
-      // Guidance that arrived during the last request gets its own leg, so the
-      // turn does not end with an unanswered steer in the transcript.
-      while (reason === 'complete' && chat.steering.length > 0 && !controller.signal.aborted) {
-        reason = await runAgent(runOptions);
+      // Refresh the prompt so edits to AGENTS.md (and newly registered MCP tools)
+      // apply from the next message, not the next launch.
+      chat.messages[0] = { role: 'system', content: buildSystemPrompt(chat.workspace, config.readOnly, config.reviewMode, config.allowQuestions) };
+      const chatSession = ensureSession(chat);
+      // A pasted key is stopped at the door: it never enters the transcript, the
+      // request, or the echo the window renders.
+      const safeText = redactSecrets(text);
+      userMessage = { role: 'user', content: safeText };
+      if (attachments.length > 0) userMessage.attachments = attachments;
+      chat.messages.push(userMessage);
+      chatSession?.append(userMessage);
+      hub.broadcast({
+        type: 'user',
+        chatId: chat.id,
+        requestId,
+        text: safeText,
+        attachments: attachments.map(({ id, name, kind, mime, size }) => ({ id, name, kind, mime, size })),
+      });
+      // The first message of a new chat creates its file; every turn refreshes the
+      // rail, because the title and timestamp come from the transcript.
+      hub.broadcast({ type: 'chats', ...chatState() });
+
+      const controller = new AbortController();
+      chat.controller = controller;
+      const chatUi = new ChatUi(hub, chat);
+      // Each turn measures its own blocked stretches.
+      chat.blockedMs = 0;
+      chat.blockedSince = null;
+      // One clock for this turn: the chat carries it so a window that swaps away and
+      // back resumes the same elapsed working time instead of restarting at zero.
+      chat.turnStartedAt = Date.now();
+      const turnStartedAt = chat.turnStartedAt;
+      hub.broadcast({ type: 'turn-start', chatId: chat.id, startedAt: turnStartedAt, ...usage(chat) });
+
+      try {
+        const runOptions = {
+          // The agent gets this chat's project, so tools, checks, and checkpoints
+          // all resolve inside the folder the chat belongs to.
+          config: chatConfig(chat),
+          permissions: chat.permissions,
+          messages: chat.messages,
+          ui: chatUi,
+          session: chatSession,
+          signal: controller.signal,
+          onUsage: (usage: TokenUsage) => onUsage(usage, chat),
+          steering: { drain: () => chat.steering.splice(0) },
+          ask: (request: QuestionRequest) => questionHandler(chat, request),
+        };
+        let reason = await runAgent(runOptions);
+        // Guidance that arrived during the last request gets its own leg, so the
+        // turn does not end with an unanswered steer in the transcript.
+        while (reason === 'complete' && chat.steering.length > 0 && !controller.signal.aborted) {
+          reason = await runAgent(runOptions);
+        }
+        const durationMs = activeTurnMs(chat, turnStartedAt);
+        timeStats.sessionMs += durationMs;
+        chat.timeMs += durationMs;
+        timeStats.lifetime = await recordTime(durationMs, usageSessionId);
+        // Durable per-chat time: the rail reads these events back after a restart.
+        chat.session?.appendEvent({ type: 'time', ms: durationMs });
+        // No rail snapshot here: busy and the pending cards are cleared in the
+        // finally below, which broadcasts the authoritative "chats" event. Sending
+        // a stale one here would repaint the status dot as "working" for a frame.
+        hub.broadcast({ type: 'turn-end', chatId: chat.id, reason, durationMs, chatTimeMs: chat.timeMs, ...usage(chat) });
+      } catch (error) {
+        const message = error instanceof ProviderError ? error.message : (error as Error).message;
+        hub.broadcast({ type: 'error', chatId: chat.id, message });
+        // The transcript may have grown before the failure; refresh the meter.
+        const durationMs = activeTurnMs(chat, turnStartedAt);
+        timeStats.sessionMs += durationMs;
+        chat.timeMs += durationMs;
+        timeStats.lifetime = await recordTime(durationMs, usageSessionId);
+        chat.session?.appendEvent({ type: 'time', ms: durationMs });
+        hub.broadcast({ type: 'turn-end', chatId: chat.id, reason: 'error', durationMs, chatTimeMs: chat.timeMs, ...usage(chat) });
       }
-      const durationMs = Date.now() - turnStartedAt;
-      timeStats.sessionMs += durationMs;
-      chat.timeMs += durationMs;
-      timeStats.lifetime = await recordTime(durationMs, usageSessionId);
-      hub.broadcast({ type: 'turn-end', chatId: chat.id, reason, durationMs, chatTimeMs: chat.timeMs, ...usage(chat), ...chatState() });
     } catch (error) {
-      const message = error instanceof ProviderError ? error.message : (error as Error).message;
-      hub.broadcast({ type: 'error', chatId: chat.id, message });
-      // The transcript may have grown before the failure; refresh the meter.
-      const durationMs = Date.now() - turnStartedAt;
-      timeStats.sessionMs += durationMs;
-      chat.timeMs += durationMs;
-      timeStats.lifetime = await recordTime(durationMs, usageSessionId);
-      hub.broadcast({ type: 'turn-end', chatId: chat.id, reason: 'error', durationMs, chatTimeMs: chat.timeMs, ...usage(chat), ...chatState() });
+      // Setup failed before the model could stream. Report it, then let the
+      // finally clear the turn and repaint the rail.
+      hub.broadcast({ type: 'error', chatId: chat.id, message: (error as Error).message });
     } finally {
-      // A steer that raced an abort or a step limit still joins the transcript,
-      // so the next message is answered with the guidance in context.
-      const late = chat.steering.splice(0);
-      for (const message of late) {
-        const steer: UserMessage = { role: 'user', content: redactSecrets(message) };
-        chat.messages.push(steer);
-        chat.session?.append(steer);
-      }
-      // Nothing was answered, so the prompt is not part of the conversation: drop
-      // it instead of replaying it to the model on the next turn.
-      if (late.length === 0 && chat.partial === '' && chat.messages[chat.messages.length - 1] === userMessage) {
-        retractEmptyTurn(chat, userMessage, requestId);
-      }
+      // Capture whether the model produced anything before clearing the buffer:
+      // that decides whether the unanswered prompt is retracted.
+      const producedPartial = chat.partial !== '';
+      // Clear the turn first. The transcript bookkeeping below is best-effort and
+      // must never be able to leave the chat looking busy.
       chat.busy = false;
       chat.controller = undefined;
       chat.partial = '';
+      // No turn is running any more, so nothing should resume its clock.
+      chat.turnStartedAt = null;
+      try {
+        // A steer that raced an abort or a step limit still joins the transcript,
+        // so the next message is answered with the guidance in context.
+        const late = chat.steering.splice(0);
+        for (const message of late) {
+          const steer: UserMessage = { role: 'user', content: redactSecrets(message) };
+          chat.messages.push(steer);
+          chat.session?.append(steer);
+        }
+        // Nothing was answered, so the prompt is not part of the conversation: drop
+        // it instead of replaying it to the model on the next turn.
+        if (late.length === 0 && !producedPartial && userMessage && chat.messages[chat.messages.length - 1] === userMessage) {
+          retractEmptyTurn(chat, userMessage, requestId);
+        }
+      } catch {
+        // A transcript that cannot be written must not keep the chat busy.
+      }
       denyPending(chat);
       hub.broadcast({ type: 'chats', ...chatState() });
     }
@@ -1645,7 +1781,7 @@ async function main(): Promise<void> {
         return;
       }
 
-      const supplied = req.headers['x-vaelen-token'] ?? url.searchParams.get('token');
+      const supplied = req.headers['x-radical-token'] ?? url.searchParams.get('token');
       if (supplied !== token) {
         json(res, 401, { error: 'Invalid or missing access token' });
         return;
@@ -1680,6 +1816,8 @@ async function main(): Promise<void> {
             target: entry.target,
           })),
           pendingQuestions: pendingQuestions(activeChat),
+          // Lets a reloaded window resume the running turn's clock.
+          turnStartedAt: activeChat.turnStartedAt,
           mode: currentMode(),
           ask: currentAsk(),
           // A reload mid-turn must not come back as idle.
@@ -1789,6 +1927,10 @@ async function main(): Promise<void> {
         }
         if (message === '' && attachments.length === 0) {
           json(res, 400, { error: 'message or attachments are required' });
+          return;
+        }
+        if (message.length > MAX_MESSAGE_CHARS) {
+          json(res, 400, { error: `message is too long (max ${MAX_MESSAGE_CHARS.toLocaleString()} characters)` });
           return;
         }
         const requestId = typeof body.requestId === 'string' ? body.requestId.slice(0, 80) : undefined;
@@ -1942,10 +2084,9 @@ async function main(): Promise<void> {
       }
 
       if (req.method === 'POST' && url.pathname === '/api/workspace') {
-        if (anyBusy()) {
-          json(res, 409, { error: 'cannot switch workspace while a turn is running' });
-          return;
-        }
+        // Deliberately not anyBusy(): a chat's project is its own, so an unrelated
+        // turn must not block this. The per-chat guard below is the one that
+        // matters, because changing a project resets that chat's transcript.
         const body = await readJson(req);
         const requested = typeof body.path === 'string' ? body.path.trim() : '';
         if (requested === '') {
@@ -2111,6 +2252,47 @@ async function main(): Promise<void> {
         return;
       }
 
+      if (req.method === 'GET' && url.pathname === '/api/fs/list') {
+        // The folder picker behind the header. It lists directories only — never
+        // file contents — so the window can offer a real path chooser without a
+        // native dialog, and it starts in the home folder.
+        const requested = (url.searchParams.get('path') ?? '').trim();
+        if (requested.length > MAX_PATH_CHARS) {
+          json(res, 400, { error: 'path is too long' });
+          return;
+        }
+        const target = requested === '' ? homedir() : resolve(requested);
+        try {
+          const info = statSync(target, { throwIfNoEntry: false });
+          if (!info || !info.isDirectory()) {
+            json(res, 400, { error: `not a directory: ${target}` });
+            return;
+          }
+          const entries: { name: string; path: string }[] = [];
+          let truncated = false;
+          for (const dirent of readdirSync(target, { withFileTypes: true })) {
+            if (!isDirectoryEntry(target, dirent)) continue;
+            if (entries.length >= MAX_FS_ENTRIES) {
+              truncated = true;
+              break;
+            }
+            entries.push({ name: dirent.name, path: join(target, dirent.name) });
+          }
+          entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+          const up = dirname(target);
+          json(res, 200, {
+            path: target,
+            parent: up === target ? null : up,
+            entries,
+            truncated,
+            roots: folderRoots(activeChat.workspace),
+          });
+        } catch (error) {
+          json(res, 400, { error: `cannot read ${target}: ${(error as Error).message}` });
+        }
+        return;
+      }
+
       if (req.method === 'GET' && url.pathname === '/api/audit') {
         const requested = Number(url.searchParams.get('limit') ?? '20');
         const limit = Number.isFinite(requested) && requested > 0 ? Math.min(200, Math.floor(requested)) : 20;
@@ -2131,8 +2313,8 @@ async function main(): Promise<void> {
           verify?: boolean;
         } = {};
 
-        if (typeof body.baseUrl === 'string' && body.baseUrl.trim() !== '') {
-          const candidate = body.baseUrl.trim().replace(/\/+$/, '');
+        if (typeof body.baseUrl === 'string' && body.baseUrl.trim().slice(0, MAX_KEY_CHARS) !== '') {
+          const candidate = body.baseUrl.trim().slice(0, MAX_KEY_CHARS).replace(/\/+$/, '');
           let parsed: URL;
           try {
             parsed = new URL(candidate);
@@ -2170,12 +2352,12 @@ async function main(): Promise<void> {
           config.contextBudgetPinned = true;
           patch.contextBudget = config.contextBudget;
         }
-        if (typeof body.apiKey === 'string' && body.apiKey.trim() !== '') {
-          config.apiKey = body.apiKey.trim();
+        if (typeof body.apiKey === 'string' && body.apiKey.trim().slice(0, MAX_KEY_CHARS) !== '') {
+          config.apiKey = body.apiKey.trim().slice(0, MAX_KEY_CHARS);
           patch.apiKey = config.apiKey;
         }
-        if (typeof body.opencodeKey === 'string' && body.opencodeKey.trim() !== '') {
-          config.opencodeKey = body.opencodeKey.trim();
+        if (typeof body.opencodeKey === 'string' && body.opencodeKey.trim().slice(0, MAX_KEY_CHARS) !== '') {
+          config.opencodeKey = body.opencodeKey.trim().slice(0, MAX_KEY_CHARS);
           patch.opencodeKey = config.opencodeKey;
           if (config.apiKey === '') {
             config.baseUrl = 'https://opencode.ai/inference/openai/v1';
@@ -2267,7 +2449,7 @@ async function main(): Promise<void> {
     const url = `http://127.0.0.1:${port}/?token=${token}`;
     const redacted = url.replace(token, '***');
     const startup =
-      `Vaelen GUI ${VERSION}\nworkspace: ${config.workspace}\nmodel: ${config.model}\n` +
+      `Radical GUI ${VERSION}\nworkspace: ${config.workspace}\nmodel: ${config.model}\n` +
       `key: ${config.apiKey ? 'configured' : 'not set'}\nconfig: ${configFilePath()}\n`;
     // The log outlives the process, so it gets the URL without the token.
     say(`${startup}url: ${url}\nVAELEN_URL=${url}\n`, `${startup}url: ${redacted}\nVAELEN_URL=${redacted}\n`);
@@ -2284,7 +2466,7 @@ async function main(): Promise<void> {
       server.listen(0, '127.0.0.1');
       return;
     }
-    fail(`Vaelen GUI failed: ${error.message}\n`);
+    fail(`Radical GUI failed: ${error.message}\n`);
     process.exit(1);
   });
 
@@ -2311,7 +2493,7 @@ function crashLog(error: unknown): void {
     const path = join(homedir(), '.vaelen', 'crash.log');
     mkdirSync(dirname(path), { recursive: true });
     const stack = error instanceof Error ? error.stack ?? error.message : String(error);
-    appendFileSync(path, `${new Date().toISOString()} VaelenGUI crash\n${stack}\n\n`);
+    appendFileSync(path, `${new Date().toISOString()} RadicalHarness crash\n${stack}\n\n`);
   } catch { /* crash logging is best-effort */ }
 }
 
@@ -2320,6 +2502,6 @@ process.on('unhandledRejection', (reason) => { crashLog(reason); });
 
 main().catch((error: unknown) => {
   crashLog(error);
-  fail(`Vaelen GUI failed: ${error instanceof Error ? error.message : String(error)}\n`);
+  fail(`Radical GUI failed: ${error instanceof Error ? error.message : String(error)}\n`);
   process.exit(1);
 });

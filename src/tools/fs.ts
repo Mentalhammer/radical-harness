@@ -6,6 +6,7 @@ import type { ToolSpec } from '../types.ts';
 import {
   IGNORED_DIRS,
   ToolError,
+  filesystemError,
   optionalBoolean,
   optionalNumber,
   optionalString,
@@ -149,8 +150,12 @@ export const writeFileTool: ToolSpec = {
         ? await readFile(absolute, 'utf8').catch(() => '')
         : null;
     ctx.checkpoints?.snapshot(absolute);
-    await mkdir(dirname(absolute), { recursive: true });
-    await writeFile(absolute, args.content, 'utf8');
+    try {
+      await mkdir(dirname(absolute), { recursive: true });
+      await writeFile(absolute, args.content, 'utf8');
+    } catch (error) {
+      throw filesystemError(`Could not write ${relativePath(ctx.workspace, absolute)}`, error);
+    }
 
     const lineCount = args.content === '' ? 0 : args.content.split('\n').length;
     if (!info) return { content: `Created ${relativePath(ctx.workspace, absolute)} (${lineCount} lines)`, mutated: true };
@@ -249,7 +254,11 @@ export const editFileTool: ToolSpec = {
 
     const output = normalize ? replaced.replace(/\n/g, '\r\n') : replaced;
     ctx.checkpoints?.snapshot(absolute);
-    await writeFile(absolute, output, 'utf8');
+    try {
+      await writeFile(absolute, output, 'utf8');
+    } catch (error) {
+      throw filesystemError(`Could not write ${relativePath(ctx.workspace, absolute)}`, error);
+    }
 
     const beforeLines = original.split('\n').length;
     const afterLines = output.split('\n').length;

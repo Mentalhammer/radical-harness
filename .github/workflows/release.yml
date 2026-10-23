@@ -26,22 +26,22 @@ jobs:
           npm run test:unit
           npm run smoke
 
-      - name: Package VaelenGUI.exe
+      - name: Package RadicalHarness.exe
         run: npm run exe
 
       - name: Checksum
         shell: pwsh
         run: |
-          $hash = (Get-FileHash VaelenGUI.exe -Algorithm SHA256).Hash.ToLower()
-          "$hash  VaelenGUI.exe" | Out-File -Encoding ascii VaelenGUI.exe.sha256
-          Get-Content VaelenGUI.exe.sha256
+          $hash = (Get-FileHash RadicalHarness.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  RadicalHarness.exe" | Out-File -Encoding ascii RadicalHarness.exe.sha256
+          Get-Content RadicalHarness.exe.sha256
 
       - uses: actions/upload-artifact@v4
         with:
-          name: VaelenGUI-windows
+          name: RadicalHarness-windows
           path: |
-            VaelenGUI.exe
-            VaelenGUI.exe.sha256
+            RadicalHarness.exe
+            RadicalHarness.exe.sha256
           if-no-files-found: error
 
       - name: Attach to the release
@@ -49,12 +49,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            VaelenGUI.exe
-            VaelenGUI.exe.sha256
+            RadicalHarness.exe
+            RadicalHarness.exe.sha256
           generate_release_notes: true
           body: |
             Windows build, unsigned: SmartScreen will warn on first run. Build it
             yourself with `npm run exe` if you would rather not trust the binary.
-            Verify the download against `VaelenGUI.exe.sha256`.
+            Verify the download against `RadicalHarness.exe.sha256`.
 
             The executable embeds a Node.js runtime; see THIRD-PARTY-NOTICES.md.

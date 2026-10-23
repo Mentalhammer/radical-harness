@@ -20,7 +20,10 @@ export class AuditLog {
   #broken = false;
 
   constructor(workspace: string, session: string, override?: string) {
-    this.path = override && override.trim() !== '' ? override.trim() : join(workspace, '.vaelen', 'audit.jsonl');
+    // The env override used to be resolved by an unused helper, so
+    // VAELEN_AUDIT_FILE was silently ignored while every other ledger honoured
+    // its own. Going through auditPathFor makes the two agree.
+    this.path = override && override.trim() !== '' ? override.trim() : auditPathFor(workspace);
     this.#session = session;
   }
 

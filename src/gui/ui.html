@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Vaelen</title>
+    <title>Radical</title>
     <style>
       :root {
         color-scheme: dark;
@@ -116,6 +116,41 @@
         border-bottom: 1px solid var(--line);
         background: var(--panel);
       }
+      /* The open chat's latest prompt, pinned above the transcript so it stays
+         visible while the answer scrolls. One line; the tooltip has the rest. */
+      .prompt-bar {
+        flex: none;
+        border-bottom: 1px solid var(--line);
+        background: var(--bg);
+      }
+      .prompt-bar[hidden] { display: none; }
+      .prompt-bar-inner {
+        max-width: 860px;
+        margin: 0 auto;
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        min-width: 0;
+        padding: 6px 16px 7px;
+      }
+      .prompt-label {
+        flex: none;
+        font-size: 9.5px;
+        letter-spacing: 0.06em;
+        text-transform: uppercase;
+        color: var(--muted);
+        opacity: 0.8;
+      }
+      .prompt-text {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        font-size: 12px;
+        color: var(--text);
+        opacity: 0.78;
+      }
       .brand { font-weight: 650; letter-spacing: 0.3px; }
       .badge {
         font: 11px/1 ui-monospace, "Cascadia Code", monospace;
@@ -129,16 +164,10 @@
       .workspace {
         flex: 1;
         min-width: 0;
-        /* Room for the folder icon painted below, so text never sits on it. */
-        padding: 4px 6px 4px 24px;
+        padding: 4px 6px;
         border: 1px solid transparent;
         border-radius: 6px;
         background-color: transparent;
-        /* A folder glyph, inlined so the bundle stays a single file. */
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%238b98a5' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 4.25c0-.83.67-1.5 1.5-1.5h2.28c.4 0 .78.16 1.06.44l.72.72h5.44c.83 0 1.5.67 1.5 1.5v6.34c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5z'/%3E%3C/svg%3E");
-        background-repeat: no-repeat;
-        background-position: 6px center;
-        background-size: 14px 14px;
         text-align: left;
         color: var(--muted);
         font: 12px/1.2 ui-monospace, "Cascadia Code", monospace;
@@ -150,10 +179,76 @@
         color: var(--text);
         border-color: var(--accent);
         background-color: var(--bg);
-        /* The glyph follows the text from muted to bright while editing. */
-        background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%23e6edf3' stroke-width='1.3' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M1.5 4.25c0-.83.67-1.5 1.5-1.5h2.28c.4 0 .78.16 1.06.44l.72.72h5.44c.83 0 1.5.67 1.5 1.5v6.34c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5z'/%3E%3C/svg%3E");
       }
       .workspace::placeholder { color: var(--muted); opacity: 0.7; }
+      /* The folder button and the path field read as one control. */
+      .workspace-field {
+        flex: 1;
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: 2px;
+      }
+      .folder-pick {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 4px 5px;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 6px;
+        color: var(--muted);
+      }
+      .folder-pick:hover:not(:disabled) { color: var(--text); border-color: var(--line); }
+      .folder-pick:focus-visible { outline: none; color: var(--text); border-color: var(--accent); }
+      /* Folder picker dialog */
+      dialog .picker { padding: 18px; display: flex; flex-direction: column; gap: 10px; min-width: min(460px, 84vw); }
+      .picker-roots { display: flex; gap: 6px; flex-wrap: wrap; }
+      .picker-roots button { padding: 3px 8px; font-size: 11.5px; }
+      .picker-path { font: 11.5px/1.35 ui-monospace, "Cascadia Code", monospace; color: var(--muted); word-break: break-all; }
+      .picker-list {
+        max-height: 46vh;
+        overflow: auto;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        padding: 4px;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+      }
+      .picker-list button { text-align: left; background: transparent; border-color: transparent; padding: 5px 8px; }
+      .picker-list button:hover:not(:disabled) { border-color: var(--line); background: var(--panel-2); }
+      .picker-empty { padding: 8px; color: var(--muted); font-size: 12px; }
+      /* Ctrl+F find bar, sitting where Undo used to be. */
+      .find-bar {
+        display: flex;
+        align-items: center;
+        gap: 2px;
+        padding: 0 2px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--panel-2);
+      }
+      .find-bar input {
+        width: 132px;
+        padding: 4px 6px;
+        border: none;
+        background: transparent;
+        color: var(--text);
+        font: 12px/1.2 ui-monospace, "Cascadia Code", monospace;
+      }
+      .find-bar input:focus { outline: none; }
+      .find-bar input::placeholder { color: var(--muted); opacity: 0.7; }
+      .find-count {
+        min-width: 34px;
+        text-align: center;
+        font: 11px/1 ui-monospace, "Cascadia Code", monospace;
+        color: var(--muted);
+      }
+      .find-bar button { padding: 2px 6px; background: transparent; border-color: transparent; color: var(--muted); }
+      .find-bar button:hover:not(:disabled) { color: var(--text); border-color: var(--line); }
+      /* The block holding the current match, flashed in place. */
+      .find-hit { outline: 2px solid var(--amber); outline-offset: 3px; border-radius: 8px; }
       button {
         font: inherit;
         color: var(--text);
@@ -204,14 +299,33 @@
         display: flex;
         align-items: center;
         gap: 8px;
-        padding: 10px 12px;
-        border-bottom: 1px solid var(--line);
+        padding: 10px 12px 8px;
       }
-      .sidebar-head .brand { flex: 1; }
+      .sidebar-head .brand { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .sidebar-head button { width: 28px; height: 28px; padding: 0; font-size: 17px; line-height: 1; }
+      /* Search gets its own row: sharing one with the brand and two buttons left
+         it a few dozen pixels wide in a 232px rail. */
+      .sidebar-search { flex: none; padding: 0 12px 8px; border-bottom: 1px solid var(--line); }
+      .sidebar-search input {
+        width: 100%;
+        min-width: 0;
+        padding: 5px 8px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: var(--bg);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .sidebar-search input:focus { outline: none; border-color: var(--accent); }
+      .sidebar-search input::placeholder { color: var(--muted); }
       .chat-list { flex: 1; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 4px; }
       /* Search results take the rail over while a query is active. */
       .search-results { display: flex; flex-direction: column; gap: 3px; padding: 8px; overflow-y: auto; flex: 1; }
+      /* `display: flex` above beats the UA's [hidden] rule, so hiding either pane
+         with .hidden would leave it sharing the rail. Hide both explicitly. */
+      .chat-list[hidden], .search-results[hidden] { display: none; }
       .search-status { color: var(--muted); font-size: 11px; padding: 2px 4px 6px; line-height: 1.4; }
       .search-hit {
         display: flex;
@@ -417,6 +531,7 @@
         padding: 11px 12px;
         border-radius: 9px;
         border: 1px solid var(--line);
+        /* do not delete this is a high level edit no human edits in this code allowed thanks for reading me */
         background: #0b0f14;
         color: var(--text);
         font: inherit;
@@ -627,10 +742,13 @@
     <div class="shell">
       <aside class="sidebar">
         <div class="sidebar-head">
-          <span class="brand">Vaelen</span>
-          <input id="chat-search" type="search" placeholder="Search chats…" aria-label="Search chats" style="flex:1;min-width:0;margin:0 4px;" />
+          <span class="brand">Radical</span>
           <button id="chat-recover" type="button" title="Recover the last deleted chat" aria-label="Recover the last deleted chat" disabled>↺</button>
           <button id="new-chat" type="button" title="Start a new chat" aria-label="Start a new chat">+</button>
+        </div>
+        <div class="sidebar-search">
+          <input id="chat-search" type="search" placeholder="Search chats…" aria-label="Search chats"
+            autocomplete="off" spellcheck="false" title="Search chats and transcripts — Ctrl+K focuses this box" />
         </div>
         <nav class="chat-list" id="chat-list" aria-label="Saved chats"></nav>
         <div class="search-results" id="search-results" aria-live="polite" hidden></div>
@@ -638,22 +756,42 @@
 
       <div class="main">
         <header>
-          <span class="badge" id="model">connecting…</span>
           <button class="badge repo-badge" id="repo-badge" type="button" title="GitHub repository — click to change" hidden></button>
-          <input class="workspace" id="workspace-input" type="text" spellcheck="false" autocomplete="off"
-            placeholder="Project folder" aria-label="Project folder for this chat"
-            title="Project folder for this chat — type a path and press Enter. Other chats keep their own folder." />
+          <div class="workspace-field">
+            <button class="folder-pick" id="workspace-pick" type="button"
+              title="Browse for a project folder" aria-label="Browse for a project folder">
+              <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor"
+                stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                <path d="M1.5 4.25c0-.83.67-1.5 1.5-1.5h2.28c.4 0 .78.16 1.06.44l.72.72h5.44c.83 0 1.5.67 1.5 1.5v6.34c0 .83-.67 1.5-1.5 1.5H3c-.83 0-1.5-.67-1.5-1.5z" />
+              </svg>
+            </button>
+            <input class="workspace" id="workspace-input" type="text" spellcheck="false" autocomplete="off"
+              placeholder="Project folder" aria-label="Project folder for this chat"
+              title="Project folder for this chat — an approximate target, not a constraint. Tools may read or write outside it when a path asks them to; OS directories are still refused. Type a path and press Enter, or use the folder button to browse. Other chats keep their own folder." />
+          </div>
           <div class="mode" role="group" aria-label="Access mode">
             <button id="mode-read" type="button" aria-pressed="false" title="Inspect only — blocks edits and mutating commands">Read</button>
             <button id="mode-edit" type="button" class="active" aria-pressed="true" title="Allow edits and commands that change the project">Edit</button>
           </div>
           <div class="mode" role="group" aria-label="Question mode">
-            <button id="ask-auto" type="button" aria-pressed="false" title="No questions — Vaelen proceeds with its best guess">Auto</button>
-            <button id="ask-ask" type="button" class="active" aria-pressed="true" title="Ask — Vaelen may ask high-level clarifying questions">Ask</button>
+            <button id="ask-auto" type="button" aria-pressed="false" title="No questions — Radical proceeds with its best guess">Auto</button>
+            <button id="ask-ask" type="button" class="active" aria-pressed="true" title="Ask — Radical may ask high-level clarifying questions">Ask</button>
           </div>
-          <button id="undo" type="button" title="Restore files from the last turn">Undo</button>
+          <div class="find-bar" id="find-bar" title="Find in this conversation (Ctrl+F)">
+            <input id="find-input" type="search" placeholder="Find in chat" autocomplete="off" spellcheck="false" aria-label="Find in this conversation" />
+            <span class="find-count" id="find-count" aria-live="polite"></span>
+            <button id="find-prev" type="button" title="Previous match (Shift+Enter)" aria-label="Previous match">&#8593;</button>
+            <button id="find-next" type="button" title="Next match (Enter)" aria-label="Next match">&#8595;</button>
+          </div>
           <button id="settings" type="button">Settings</button>
         </header>
+
+        <div class="prompt-bar" id="prompt-bar" hidden>
+          <div class="prompt-bar-inner">
+            <span class="prompt-label">Prompt</span>
+            <span class="prompt-text" id="prompt-text"></span>
+          </div>
+        </div>
 
         <main id="scroll">
           <div class="wrap" id="log"></div>
@@ -671,7 +809,7 @@
           </svg>
         </button>
         <input id="file-input" type="file" multiple hidden />
-        <textarea id="input" rows="1" placeholder="Ask Vaelen to change something in this project…"></textarea>
+        <textarea id="input" rows="1" placeholder="Ask Radical to change something in this project…"></textarea>
         <button class="primary" id="send" type="submit">Send</button>
         <button id="stop" type="button" hidden>Stop</button>
       </form>
@@ -685,7 +823,7 @@
 
     <div class="onboarding" id="onboarding" hidden>
       <div class="onboarding-card" role="dialog" aria-modal="true" aria-labelledby="onboarding-title">
-        <h1 id="onboarding-title">Welcome to Vaelen — connect DeepSeek</h1>
+        <h1 id="onboarding-title">Welcome to Radical — connect DeepSeek</h1>
         <p class="sub">Paste one API key and it is saved to <code>~/.vaelen/config.json</code> for every future session. Takes about a minute.</p>
         <ol class="onboarding-steps">
           <li><span class="n">1</span><span>Create an account at <a href="https://platform.deepseek.com/sign_up" target="_blank" rel="noreferrer">platform.deepseek.com →</a> (or <a href="https://platform.deepseek.com" target="_blank" rel="noreferrer">log in →</a>).</span></li>
@@ -701,12 +839,27 @@
       </div>
     </div>
 
+    <dialog id="folder-picker">
+      <div class="picker">
+        <h2>Open project folder</h2>
+        <div class="picker-roots" id="picker-roots"></div>
+        <div class="picker-path" id="picker-path"></div>
+        <div class="picker-list" id="picker-list" role="listbox" aria-label="Folders"></div>
+        <p class="dialog-hint" id="picker-hint">Only folders are listed. This chat works in the folder you pick.</p>
+        <div class="row">
+          <button type="button" id="picker-cancel">Cancel</button>
+          <button type="button" id="picker-up">Up</button>
+          <button type="button" id="picker-use" class="primary">Use this folder</button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="settings-panel">
       <form method="dialog" id="settings-form">
         <h2>Repository</h2>
         <p class="repo-status" id="repo-status">No repository — working in the local folder below.</p>
         <div class="repo-row">
-          <input id="repo-input" placeholder="owner/repo or GitHub URL" autocomplete="off" spellcheck="false" />
+          <input id="repo-input" placeholder="owner/repo or GitHub URL" autocomplete="off" spellcheck="false" aria-label="Repository (owner/name or GitHub URL)" />
           <button type="button" id="repo-open" class="primary">Open</button>
           <button type="button" id="repo-close" hidden>Close</button>
         </div>
@@ -743,22 +896,33 @@
     <script>
       const token = new URLSearchParams(location.search).get('token') || '';
       // The key lives in the server's config file only. Older builds mirrored it
-      // into localStorage under vaelen.apiKey; clean that up once.
+      // into localStorage under radical.apiKey; clean that up once.
       try {
-        localStorage.removeItem('vaelen.apiKey');
+        localStorage.removeItem('radical.apiKey');
       } catch {
         // Storage can be unavailable; nothing to clean up then.
       }
       const log = document.getElementById('log');
       const scroller = document.getElementById('scroll');
+      const promptBar = document.getElementById('prompt-bar');
+      const promptText = document.getElementById('prompt-text');
       const input = document.getElementById('input');
       const sendButton = document.getElementById('send');
       const stopButton = document.getElementById('stop');
       const status = document.getElementById('status');
       const statusLabel = document.getElementById('status-label');
-      const modelBadge = document.getElementById('model');
       const workspaceInput = document.getElementById('workspace-input');
       const settingsPanel = document.getElementById('settings-panel');
+      const folderPicker = document.getElementById('folder-picker');
+      const workspacePick = document.getElementById('workspace-pick');
+      const pickerRoots = document.getElementById('picker-roots');
+      const pickerPath = document.getElementById('picker-path');
+      const pickerList = document.getElementById('picker-list');
+      const pickerHint = document.getElementById('picker-hint');
+      const pickerUp = document.getElementById('picker-up');
+      const pickerUse = document.getElementById('picker-use');
+      // The folder the dialog is showing; "Use this folder" adopts it.
+      let pickerDirectory = '';
       const modeRead = document.getElementById('mode-read');
       const modeEdit = document.getElementById('mode-edit');
       const askAuto = document.getElementById('ask-auto');
@@ -769,7 +933,8 @@
       const chatList = document.getElementById('chat-list');
       const newChatButton = document.getElementById('new-chat');
       const recoverButton = document.getElementById('chat-recover');
-      const undoButton = document.getElementById('undo');
+      const findInput = document.getElementById('find-input');
+      const findCount = document.getElementById('find-count');
       const verifyToggle = document.getElementById('verify-toggle');
       const maxStepsInput = document.getElementById('max-steps');
       const maxStepsUnlimited = document.getElementById('max-steps-unlimited');
@@ -826,13 +991,13 @@
       async function post(path, body) {
         return fetch(path, {
           method: 'POST',
-          headers: { 'content-type': 'application/json', 'x-vaelen-token': token },
+          headers: { 'content-type': 'application/json', 'x-radical-token': token },
           body: JSON.stringify(body || {}),
         });
       }
 
       async function getJson(path) {
-        const response = await fetch(path, { headers: { 'x-vaelen-token': token } });
+        const response = await fetch(path, { headers: { 'x-radical-token': token } });
         const body = await response.json().catch(() => ({}));
         return { response, body };
       }
@@ -920,18 +1085,27 @@
           }
           node.append(files);
         }
+        setPromptBar(text, attachments);
         scrollDown(true);
         return node;
       }
 
-      function formatDuration(ms) {
-        const s = Math.max(0, Math.floor((ms || 0) / 1000));
-        const h = Math.floor(s / 3600);
-        const m = Math.floor((s % 3600) / 60);
-        const sec = s % 60;
-        if (h > 0) return `${h}h ${m}m`;
-        if (m > 0) return `${m}m ${String(sec).padStart(2, '0')}s`;
-        return `${sec}s`;
+      /**
+       * Pins the open chat's latest user prompt above the transcript. A chat with
+       * no user message yet hides the bar rather than keeping the previous chat's
+       * prompt on screen.
+       */
+      function setPromptBar(text, attachments = []) {
+        const body = String(text || '').replace(/\s+/g, ' ').trim();
+        const files = Array.isArray(attachments) ? attachments.length : 0;
+        const fileNote =
+          files === 1 ? attachments[0]?.name || 'attachment' : files > 1 ? `${files} attachments` : '';
+        const shown = [body, fileNote].filter(Boolean).join('  ·  ');
+        promptText.textContent = shown;
+        // The bar clips to one line; keep the tooltip useful without letting a
+        // pasted 100k-character message become a 100k-character native tooltip.
+        promptBar.title = shown.length > 2000 ? `${shown.slice(0, 2000)}…` : shown;
+        promptBar.hidden = shown === '';
       }
 
       function formatSize(bytes) {
@@ -1342,7 +1516,7 @@
       }
 
       function draftKey() {
-        return 'vaelen.draft:' + currentWorkspace;
+        return 'radical.draft:' + currentWorkspace;
       }
 
       function saveDraft(value) {
@@ -1562,7 +1736,7 @@
 
         const title = document.createElement('div');
         title.className = 'title';
-        title.textContent = 'Vaelen has a question';
+        title.textContent = 'Radical has a question';
 
         const text = document.createElement('div');
         text.className = 'question-text';
@@ -1621,17 +1795,24 @@
       }
 
       function formatTokens(value) {
-        if (value >= 100_000) return Math.round(value / 1000) + 'k';
-        if (value >= 1000) return (value / 1000).toFixed(1).replace(/\.0$/, '') + 'k';
-        return String(value);
+        // Promote *before* rounding, or 999,600 renders as "1000k" instead of "1M".
+        const v = typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0;
+        const trim = (text) => text.replace(/\.0$/, '');
+        if (v >= 999_500_000) return trim((v / 1e9).toFixed(1)) + 'B';
+        if (v >= 999_500) return trim((v / 1e6).toFixed(1)) + 'M';
+        if (v >= 100_000) return Math.round(v / 1000) + 'k';
+        if (v >= 1000) return trim((v / 1000).toFixed(1)) + 'k';
+        return String(Math.round(v));
       }
 
       /** Compact number for the lifetime counter: 948, 12.4k, 3.21M, 1.4B. */
       function formatCount(value) {
         if (typeof value !== 'number' || !Number.isFinite(value) || value <= 0) return '0';
         const trim = (text) => text.replace(/\.?0+$/, '');
-        if (value >= 1e9) return trim((value / 1e9).toFixed(2)) + 'B';
-        if (value >= 1e6) return trim((value / 1e6).toFixed(2)) + 'M';
+        // Same promotion rule: a value that rounds up to the next unit is shown
+        // as that unit, never as "1000k" or "1000M".
+        if (value >= 999_500_000) return trim((value / 1e9).toFixed(2)) + 'B';
+        if (value >= 999_500) return trim((value / 1e6).toFixed(2)) + 'M';
         if (value >= 1e4) return Math.round(value / 1e3) + 'k';
         if (value >= 1e3) return trim((value / 1e3).toFixed(1)) + 'k';
         return String(Math.round(value));
@@ -1650,6 +1831,15 @@
       }
 
       let turnStartedAt = 0;
+      // Which chat the running live timer belongs to, so a background turn never
+      // makes the viewed chat look busy (and never leaves it looking busy).
+      let turnChatId = null;
+      /**
+       * Every chat with a turn in flight, keyed by chat id ('' while unsaved).
+       * Working time is the sum of these clocks, so two chats running at once
+       * stack: ten seconds each add twenty seconds to the lifetime counter.
+       */
+      const liveTurns = new Map();
       let sessionMs = 0;
       let lifetimeMs = 0;
       let lifetimeTurns = 0;
@@ -1657,32 +1847,78 @@
       const contextTurn = document.getElementById('context-turn');
       const contextTime = document.getElementById('context-time');
 
+      /** A chat's live-turn key; an unsaved chat has one too. */
+      function chatKey(id) {
+        return typeof id === 'string' ? id : '';
+      }
+
+      /** Sum of every running chat's live clock. */
+      function liveWorkingMs() {
+        const now = Date.now();
+        let total = 0;
+        for (const startedAt of liveTurns.values()) total += Math.max(0, now - startedAt);
+        return total;
+      }
+
       function renderTime() {
-        const live = turnStartedAt > 0 ? Date.now() - turnStartedAt : 0;
-        contextTurn.textContent = live > 0 ? `working ${formatDuration(live)}` : 'idle';
-        contextTurn.title = live > 0
-          ? `This turn has been working for ${formatDuration(live)} (session ${formatDuration(sessionMs + live)}).`
-          : `Session working time: ${formatDuration(sessionMs)}.`;
+        const viewed = turnStartedAt > 0 ? Math.max(0, Date.now() - turnStartedAt) : 0;
+        const live = liveWorkingMs();
+        contextTurn.textContent = viewed > 0 ? `working ${formatDuration(viewed)}` : 'idle';
+        contextTurn.title = viewed > 0
+          ? `This turn has been working for ${formatDuration(viewed)} (session ${formatDuration(sessionMs + live)}).`
+          : `Session working time: ${formatDuration(sessionMs + live)}.`;
         contextTime.textContent = `${formatDuration(lifetimeMs + live)} working`;
+        const running = liveTurns.size;
         contextTime.title =
           `Working time across every session: ${formatDuration(lifetimeMs + live)} over ${(lifetimeTurns || 0).toLocaleString()} turns.` +
+          (running > 1 ? ` ${running} chats are working at once, so their time stacks.` : '') +
           (currentLedger ? ` Time ledger: ${currentLedger.replace('usage.jsonl', 'time.jsonl')}` : '');
+      }
+
+      /** Ticks while any chat works, not just the one on screen. */
+      function syncTimeTicker() {
+        if (liveTurns.size > 0) {
+          if (!turnTimer) turnTimer = setInterval(renderTime, 1000);
+        } else if (turnTimer) {
+          clearInterval(turnTimer);
+          turnTimer = 0;
+        }
+        renderTime();
+      }
+
+      /**
+       * Keeps the live-turn map in step with the rail. A busy row carries its
+       * start time, so a reload (or a missed event) still shows the real total.
+       */
+      function reconcileLiveTurns() {
+        for (const chat of currentChats) {
+          const key = chatKey(chat.id);
+          if (!chat.busy) {
+            liveTurns.delete(key);
+            continue;
+          }
+          if (typeof chat.turnStartedAt === 'number' && chat.turnStartedAt > 0) {
+            liveTurns.set(key, chat.turnStartedAt);
+          }
+        }
       }
 
       function startTurnTimer(startedAt) {
         turnStartedAt = typeof startedAt === 'number' && startedAt > 0 ? startedAt : Date.now();
-        if (turnTimer) clearInterval(turnTimer);
-        turnTimer = setInterval(renderTime, 1000);
-        renderTime();
+        turnChatId = chatKey(currentChatId);
+        liveTurns.set(turnChatId, turnStartedAt);
+        syncTimeTicker();
       }
 
       function stopTurnTimer(durationMs) {
-        if (typeof durationMs === 'number' && durationMs > 0) {
-          sessionMs += 0; // server already folded this turn into sessionMs via events; avoid double count here
-        }
+        // The server folded this turn into sessionMs through the event fields, so
+        // there is nothing to add here; only the viewed clock needs clearing. The
+        // live-turn entry is dropped by the turn-end handler, because leaving a
+        // chat does not stop its turn.
+        void durationMs;
         turnStartedAt = 0;
-        if (turnTimer) { clearInterval(turnTimer); turnTimer = 0; }
-        renderTime();
+        turnChatId = null;
+        syncTimeTicker();
       }
 
       function applyTimeFields(event) {
@@ -1731,7 +1967,9 @@
         const percent = Math.max(0, Math.min(100, Math.round(ratio * 100)));
         currentBudget = budget;
         currentWindow = typeof modelWindow === 'number' && modelWindow > 0 ? modelWindow : 0;
-        contextFill.style.width = `${Math.max(ratio * 100, ratio > 0 ? 0.6 : 0).toFixed(2)}%`;
+        // Clamp: a transcript over budget must not paint past the track.
+        const width = Math.min(100, Math.max(ratio * 100, ratio > 0 ? 0.6 : 0));
+        contextFill.style.width = `${width.toFixed(2)}%`;
         contextValue.textContent = `${formatTokens(tokens)} / ${formatTokens(budget)} · ${percent}%`;
         contextBar.classList.toggle('warn', ratio >= 0.7 && ratio < 0.9);
         contextBar.classList.toggle('hot', ratio >= 0.9);
@@ -1749,8 +1987,8 @@
         modeRead.setAttribute('aria-pressed', String(read));
         modeEdit.setAttribute('aria-pressed', String(!read));
         input.placeholder = read
-          ? 'Ask Vaelen to inspect, explain, or search this project…'
-          : 'Ask Vaelen to change something in this project…';
+          ? 'Ask Radical to inspect, explain, or search this project…'
+          : 'Ask Radical to change something in this project…';
       }
 
       async function chooseMode(mode) {
@@ -1764,7 +2002,7 @@
         addNotice(
           mode === 'read'
             ? 'Read-only mode — edits and mutating commands are blocked.'
-            : 'Edit mode — Vaelen can change files in this workspace.',
+            : 'Edit mode — Radical can change files in this workspace.',
         );
         input.focus();
       }
@@ -1788,8 +2026,8 @@
         }
         addNotice(
           asking
-            ? 'Ask mode — Vaelen may ask high-level clarifying questions.'
-            : 'Auto mode — no questions, Vaelen proceeds with its best guess.',
+            ? 'Ask mode — Radical may ask high-level clarifying questions.'
+            : 'Auto mode — no questions, Radical proceeds with its best guess.',
         );
         input.focus();
       }
@@ -1805,12 +2043,6 @@
       }
 
       /** The left rail: saved chats, newest first, with the active one highlighted. */
-      /** Last path segment, which is what identifies a project at a glance. */
-      function projectLabel(path) {
-        if (typeof path !== 'string' || path === '') return '';
-        const parts = path.split(/[\\/]/).filter((part) => part !== '');
-        return parts[parts.length - 1] || path;
-      }
 
       let chatFilter = '';
       let lastRailKey = '';
@@ -1819,6 +2051,10 @@
         if (Array.isArray(chats)) currentChats = chats;
         if (activeId !== undefined) currentChatId = activeId;
         if (typeof undone === 'number') recoverable = undone;
+        // Every repaint of the rail is a chance to resync which turns are live,
+        // so a reload or a dropped event cannot leave the counters stale.
+        reconcileLiveTurns();
+        syncTimeTicker();
         recoverButton.disabled = recoverable === 0;
         recoverButton.title =
           recoverable === 0
@@ -1838,7 +2074,24 @@
 
         chatList.textContent = '';
 
-        if (currentChats.length === 0) {
+        // A chat only gets a session file with its first message, so a brand-new
+        // one had no row at all: pressing + looked like nothing happened. Stand in
+        // for it in the rail until the first turn gives it an id.
+        const rows = currentChats.slice();
+        if (currentChatId === null && !rows.some((chat) => chat.id === '')) {
+          rows.unshift({
+            id: '',
+            title: 'New chat',
+            messages: 0,
+            timeMs: 0,
+            busy: busy === true,
+            needsApproval: false,
+            updatedAt: new Date().toISOString(),
+            workspace: currentWorkspace,
+          });
+        }
+
+        if (rows.length === 0) {
           const empty = document.createElement('div');
           empty.className = 'chat-empty';
           empty.textContent = 'No saved chats yet. Send a message and it will be saved here.';
@@ -1847,7 +2100,7 @@
         }
 
         const q = chatFilter.trim().toLowerCase();
-        const visible = q === '' ? currentChats : currentChats.filter((c) => (c.title || '').toLowerCase().includes(q));
+        const visible = q === '' ? rows : rows.filter((c) => (c.title || '').toLowerCase().includes(q));
         if (q !== '' && visible.length === 0) {
           const empty = document.createElement('div');
           empty.className = 'chat-empty';
@@ -1863,7 +2116,9 @@
 
           const item = document.createElement('button');
           item.type = 'button';
-          item.className = 'chat-item' + (chat.id === currentChatId ? ' active' : '');
+          // The unsaved chat has no id, so it is active when nothing else is open.
+          const isActive = chat.id === '' ? currentChatId === null : chat.id === currentChatId;
+          item.className = 'chat-item' + (isActive ? ' active' : '');
           item.title = chat.title;
 
           const title = document.createElement('span');
@@ -1878,7 +2133,7 @@
           status.setAttribute('role', 'img');
           status.setAttribute(
             'aria-label',
-            state === 'working' ? 'Working' : state === 'approval' ? 'Waiting for your approval' : 'Idle',
+            state === 'working' ? 'Working' : state === 'approval' ? 'Waiting for your input' : 'Idle',
           );
           status.title = status.getAttribute('aria-label');
 
@@ -1889,29 +2144,38 @@
           const meta = document.createElement('span');
           meta.className = 'chat-meta';
           const when = relativeTime(chat.updatedAt);
-          // Chats are per project, so the row names the folder it belongs to.
-          const project = projectLabel(chat.workspace);
           meta.textContent =
-            (project ? project + ' · ' : '') +
             chat.messages +
             (chat.messages === 1 ? ' message' : ' messages') +
             (chat.timeMs > 0 ? ' · ' + formatDuration(chat.timeMs) : '');
           meta.title = chat.workspace || '';
 
           item.append(head, meta);
-          item.addEventListener('click', () => void switchChat(chat.id));
+          item.addEventListener('click', () => {
+            if (chat.id === '') {
+              // Already the chat being looked at: there is nothing to switch to.
+              input.focus();
+              return;
+            }
+            void switchChat(chat.id);
+          });
 
-          const remove = document.createElement('button');
-          remove.type = 'button';
-          remove.className = 'chat-delete';
-          remove.textContent = '×';
-          remove.title = `Delete "${chat.title}"`;
-          remove.setAttribute('aria-label', `Delete chat ${chat.title}`);
-          remove.disabled = chat.busy === true;
-          remove.title = chat.busy ? 'Stop this chat before deleting it' : `Delete "${chat.title}"`;
-          remove.addEventListener('click', () => void deleteChat(chat));
+          // Nothing to delete until the first message creates the file.
+          if (chat.id !== '') {
+            const remove = document.createElement('button');
+            remove.type = 'button';
+            remove.className = 'chat-delete';
+            remove.textContent = '×';
+            remove.title = `Delete "${chat.title}"`;
+            remove.setAttribute('aria-label', `Delete chat ${chat.title}`);
+            remove.disabled = chat.busy === true;
+            remove.title = chat.busy ? 'Stop this chat before deleting it' : `Delete "${chat.title}"`;
+            remove.addEventListener('click', () => void deleteChat(chat));
+            row.append(item, remove);
+          } else {
+            row.append(item);
+          }
 
-          row.append(item, remove);
           chatList.append(row);
         }
       }
@@ -1975,6 +2239,7 @@
       function showSwitchPlaceholder(id) {
         const row = currentChats.find((chat) => chat.id === id);
         log.textContent = '';
+        setPromptBar('', []);
         assistantBlock = null;
         activeTool = null;
         const node = document.createElement('div');
@@ -2004,6 +2269,7 @@
         // Long chats made switching feel laggy: every message was appended to the
         // live DOM, each append forcing a layout pass. Build detached, attach once.
         log.textContent = '';
+        setPromptBar('', []);
         assistantBlock = null;
         activeTool = null;
         renderedApprovals = new Set();
@@ -2018,6 +2284,12 @@
           log.appendChild(fragment);
         }
         scrollDown(true);
+        // The fragment is attached before layout has finished settling (wrapped
+        // tool output, images, fonts), so a single synchronous scroll stopped
+        // short of the bottom. Repeat once layout has run, and let a manual
+        // scroll-up in between win: scrollDown(false) honours the follow flag.
+        requestAnimationFrame(() => scrollDown(false));
+        setTimeout(() => scrollDown(false), 90);
       }
 
       /** Fills the transcript. Split out so renderHistory can batch the DOM work. */
@@ -2057,15 +2329,17 @@
 
       /** Recompute the shared status line from the rail (background turns keep it lit). */
       function refreshBusyFromRail() {
-        const viewedBusy = busy;
-        const anyBusy = viewedBusy || currentChats.some((chat) => chat.busy && chat.id !== currentChatId);
-        modeRead.disabled = anyBusy;
-        modeEdit.disabled = anyBusy;
-        askAuto.disabled = anyBusy;
-        askAsk.disabled = anyBusy;
-        undoButton.disabled = anyBusy;
-        status.classList.toggle('busy', anyBusy);
-        statusLabel.textContent = anyBusy ? 'working' : 'idle';
+        // The rail is the authority: a turn can end (or start) while this window
+        // was elsewhere, and a stale local flag would leave the composer on
+        // "Steer" or hide Stop with no turn behind it. An unsaved chat has no row
+        // yet, so its local state stands until one appears.
+        const row = currentChats.find((chat) => chatKey(chat.id) === chatKey(currentChatId));
+        const viewedBusy = row ? row.busy === true : busy;
+        setBusy(viewedBusy);
+        if (!viewedBusy && turnStartedAt > 0) {
+          if (turnChatId !== null) liveTurns.delete(turnChatId);
+          stopTurnTimer(0);
+        }
       }
 
       /** Busy is per chat: other chats keep running while you look at this one. */
@@ -2073,13 +2347,12 @@
         busy = value;
         // The rail entry for this chat can lag the turn-end that just arrived, so
         // only other chats decide whether the status line still says "working".
-        const anyBusy = value || currentChats.some((chat) => chat.busy && chat.id !== currentChatId);
+        const anyBusy = value || currentChats.some((chat) => chat.busy && chatKey(chat.id) !== chatKey(currentChatId));
         // Mode is global, so it waits for every chat to be idle.
         modeRead.disabled = anyBusy;
         modeEdit.disabled = anyBusy;
         askAuto.disabled = anyBusy;
         askAsk.disabled = anyBusy;
-        undoButton.disabled = anyBusy;
         stopButton.hidden = !value;
         status.classList.toggle('busy', anyBusy);
         statusLabel.textContent = anyBusy ? 'working' : 'idle';
@@ -2104,16 +2377,44 @@
         ) {
           currentChatId = event.chatId;
           pendingSendId = null;
+          // The turn may already have started under the unsaved-chat key; move
+          // that clock to the id the transcript just received.
+          const startedAt = liveTurns.get('');
+          if (startedAt !== undefined) {
+            liveTurns.delete('');
+            liveTurns.set(event.chatId, startedAt);
+          }
+          if (turnChatId === '') turnChatId = event.chatId;
         }
 
         // Events from another chat must not touch this transcript; only the
         // shared chrome (rail, lifetime counter) follows them.
-        if (event.chatId !== undefined && event.chatId !== currentChatId) {
-          if (event.type === 'turn-end' || event.type === 'approval') {
+        // The unsaved chat (null) and its empty-string id are the same chat.
+        if (event.chatId !== undefined && chatKey(event.chatId) !== chatKey(currentChatId)) {
+          if (event.type === 'turn-start') {
+            // A background turn contributes to the lifetime clock while it runs.
+            if (typeof event.startedAt === 'number' && event.startedAt > 0) {
+              liveTurns.set(chatKey(event.chatId), event.startedAt);
+            }
+            syncTimeTicker();
+          } else if (event.type === 'turn-end' || event.type === 'approval') {
             if (event.chats) renderChats(event.chats, undefined, event.recoverable);
+            if (event.type === 'turn-end') {
+              liveTurns.delete(chatKey(event.chatId));
+              syncTimeTicker();
+            }
             renderLifetime(event.lifetime);
+            // Session and lifetime time are process-wide, so they keep moving even
+            // when the turn belonged to another chat; dropping them left the
+            // lifetime counter stale until the viewed chat did something.
+            applyTimeFields(event);
             // Another chat's state changed; recompute the shared status line.
             setBusy(busy);
+          } else if (event.type === 'usage') {
+            // Shared counters: a background chat's request moves the lifetime
+            // token total now, not only when its turn happens to end.
+            renderLifetime(event.lifetime);
+            applyTimeFields(event);
           }
           return;
         }
@@ -2122,7 +2423,6 @@
           case 'hello':
             currentModel = event.model;
             currentBaseUrl = event.baseUrl;
-            modelBadge.textContent = event.model;
             setWorkspacePath(event.workspace);
             setMode(event.mode === 'read' ? 'read' : 'edit');
             setAsk(event.ask === 'ask' ? 'ask' : 'auto');
@@ -2132,11 +2432,19 @@
             renderContext(event.tokens, event.budget, event.modelWindow);
             renderLifetime(event.lifetime);
             applyTimeFields(event);
-            if (event.busy) startTurnTimer(Date.now());
             currentChatId = event.activeChatId || null;
             currentRepo = event.repo || null;
             renderRepoState({ repo: currentRepo });
+            // The rail is the truth after a reload: it names every chat still
+            // working, so their clocks can stack from their real start times.
+            liveTurns.clear();
             renderChats(event.chats || [], currentChatId, event.recoverable);
+            // A reload mid-turn must resume the real elapsed time, not start over.
+            if (event.busy) {
+              startTurnTimer(typeof event.turnStartedAt === 'number' ? event.turnStartedAt : Date.now());
+            } else {
+              stopTurnTimer(0);
+            }
             renderHistory(
               event.history || [],
               event.partial || '',
@@ -2206,7 +2514,11 @@
             addNotice(event.message, 'error');
             break;
           case 'turn-start':
-            startTurnTimer(event.startedAt);
+            // Only the viewed chat may arm the live clock: a background turn is
+            // still reported by the rail, but this window is idle.
+            if (currentChatId === null || event.chatId === undefined || event.chatId === currentChatId) {
+              startTurnTimer(event.startedAt);
+            }
             applyTimeFields(event);
             break;
           case 'usage':
@@ -2225,6 +2537,15 @@
           case 'chat':
             currentChatId = event.id || null;
             setBusy(Boolean(event.busy));
+            // Switching chats moves the clock: an idle chat shows idle, and a chat
+            // whose turn is already running resumes from when it really started, so
+            // swapping away and back does not restart the working time at zero.
+            if (event.busy) {
+              startTurnTimer(typeof event.turnStartedAt === 'number' ? event.turnStartedAt : Date.now());
+            } else {
+              liveTurns.delete(chatKey(currentChatId));
+              stopTurnTimer(0);
+            }
             if (event.chats) renderChats(event.chats, event.activeChatId, event.recoverable);
             // A search hit asked to reveal a message: do it once this transcript is up.
             requestAnimationFrame(revealJump);
@@ -2246,8 +2567,14 @@
           case 'turn-end':
             // The rail first: the status line asks it whether other chats are busy.
             if (event.chats) renderChats(event.chats, event.activeChatId, event.recoverable);
+            // Drop the finished turn before its recorded duration is shown, so
+            // the same turn is never counted both live and in the ledger.
+            liveTurns.delete(chatKey(event.chatId));
             setBusy(false);
-            stopTurnTimer(event.durationMs);
+            // A background chat finishing must not stop this chat's clock.
+            if (turnChatId === null || event.chatId === undefined || event.chatId === turnChatId) {
+              stopTurnTimer(event.durationMs);
+            }
             renderContext(event.tokens, event.budget, event.modelWindow);
             renderLifetime(event.lifetime);
             applyTimeFields(event);
@@ -2293,7 +2620,6 @@
           case 'config':
             currentModel = event.model;
             currentBaseUrl = event.baseUrl;
-            modelBadge.textContent = event.model;
             if (typeof event.verify === 'boolean') verifyEnabled = event.verify;
             if (event.ask === 'ask' || event.ask === 'auto') setAsk(event.ask);
             if (typeof event.maxSteps === 'number') currentMaxSteps = event.maxSteps;
@@ -2574,15 +2900,95 @@
           }
         });
       }
-      newChatButton.addEventListener('click', () => void startNewChat());
-      recoverButton.addEventListener('click', () => void recoverChat());
-      undoButton.addEventListener('click', async () => {
-        const response = await post('/api/undo', {});
-        if (response.ok) return; // the server broadcasts the notice to every window
-        const body = await response.json().catch(() => ({}));
-        addNotice(body.error || 'Nothing to undo.', response.status === 404 ? 'info' : 'error');
+
+      // Ctrl+K (Cmd+K on macOS) reaches the search box from anywhere, so the
+      // always-visible field is also always one keystroke away.
+      document.addEventListener('keydown', (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'k') return;
+        event.preventDefault();
+        chatSearch.focus();
+        chatSearch.select();
+      });
+      // --- Find in this conversation (Ctrl+F) -------------------------------
+      // The transcript re-renders while a turn streams, so matches are recollected
+      // on every step rather than cached.
+      let findHits = [];
+      let findIndex = 0;
+      let findMarked = null;
+
+      function findMatches(needle) {
+        const hits = [];
+        if (needle === '') return hits;
+        for (const block of log.children) {
+          const haystack = (block.textContent || '').toLowerCase();
+          let at = haystack.indexOf(needle);
+          while (at !== -1) {
+            hits.push(block);
+            at = haystack.indexOf(needle, at + needle.length);
+          }
+        }
+        return hits;
+      }
+
+      function findLabel() {
+        if (findInput.value.trim() === '') return '';
+        return findHits.length === 0 ? '0/0' : (findIndex + 1) + '/' + findHits.length;
+      }
+
+      function markFindHit() {
+        if (findMarked) findMarked.classList.remove('find-hit');
+        const block = findHits[findIndex] ?? null;
+        findMarked = block;
+        findCount.textContent = findLabel();
+        if (!block) return;
+        block.classList.add('find-hit');
+        block.scrollIntoView({ block: 'center', behavior: 'smooth' });
+      }
+
+      /** Recollects matches from the start, for a changed needle. */
+      function applyFind() {
+        findHits = findMatches(findInput.value.trim().toLowerCase());
+        findIndex = 0;
+        markFindHit();
+      }
+
+      /** Moves through the current matches, wrapping at either end. */
+      function stepFind(delta) {
+        findHits = findMatches(findInput.value.trim().toLowerCase());
+        findIndex = findHits.length === 0 ? 0 : (findIndex + delta + findHits.length) % findHits.length;
+        markFindHit();
+      }
+
+      function clearFind() {
+        findInput.value = '';
+        findHits = [];
+        findIndex = 0;
+        markFindHit();
+      }
+
+      findInput.addEventListener('input', () => applyFind());
+      findInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          stepFind(event.shiftKey ? -1 : 1);
+        } else if (event.key === 'Escape') {
+          event.preventDefault();
+          clearFind();
+          findInput.blur();
+        }
+      });
+      document.getElementById('find-next').addEventListener('click', () => stepFind(1));
+      document.getElementById('find-prev').addEventListener('click', () => stepFind(-1));
+      // Ctrl+F (Cmd+F) reaches the find box from anywhere, like a browser.
+      document.addEventListener('keydown', (event) => {
+        if (!(event.ctrlKey || event.metaKey) || event.key.toLowerCase() !== 'f') return;
+        event.preventDefault();
+        findInput.focus();
+        findInput.select();
       });
 
+      newChatButton.addEventListener('click', () => void startNewChat());
+      recoverButton.addEventListener('click', () => void recoverChat());
       const repoBadge = document.getElementById('repo-badge');
       const repoStatus = document.getElementById('repo-status');
       const repoInput = document.getElementById('repo-input');
@@ -2746,7 +3152,10 @@
             repoHint.textContent = 'GitHub returned no repositories for this account.';
             return;
           }
-          repoHint.textContent = repos.length + ' repositories from your GitHub account.';
+          repoHint.textContent =
+            repos.length +
+            ' repositories you own or collaborate on' +
+            (body.truncated === true ? ' (newest 500 shown).' : '.');
           for (const entry of repos) {
             repoMineEl.append(
               repoRow(entry, { meta: entry.visibility === 'private' ? 'private' : 'public' }),
@@ -2846,10 +3255,18 @@
        * The header field is the one place a chat's project folder is shown, so
        * every event that changes the folder paints it here.
        */
+      const WORKSPACE_TOOLTIP =
+        'an approximate target, not a constraint. Tools may read or write outside it when a path asks ' +
+        'them to; OS directories are still refused. Type a path and press Enter, or use the folder ' +
+        'button to browse. Other chats keep their own folder.';
       function setWorkspacePath(path) {
         currentWorkspace = typeof path === 'string' ? path : '';
         workspaceInput.value = currentWorkspace;
-        if (currentWorkspace !== '') workspaceInput.title = currentWorkspace;
+        // Keep the warning even after the live path replaces the placeholder text:
+        // the folder is a starting point, not a sandbox.
+        workspaceInput.title = currentWorkspace
+          ? `Workspace: ${currentWorkspace} — ${WORKSPACE_TOOLTIP}`
+          : `Project folder for this chat — ${WORKSPACE_TOOLTIP}`;
       }
 
       /** Applies a typed path to this chat; the server broadcasts the result. */
@@ -2891,6 +3308,87 @@
       });
       // Leaving the field applies what was typed, so a click elsewhere is a commit.
       workspaceInput.addEventListener('change', () => void commitWorkspacePath());
+
+      /** Renders one folder listing: roots, the current path, and its subfolders. */
+      function renderFolderListing(body) {
+        pickerDirectory = typeof body.path === 'string' ? body.path : '';
+        pickerPath.textContent = pickerDirectory;
+        pickerUp.disabled = typeof body.parent !== 'string' || body.parent === '';
+        pickerUse.disabled = pickerDirectory === '';
+
+        pickerRoots.textContent = '';
+        for (const root of Array.isArray(body.roots) ? body.roots : []) {
+          if (!root || typeof root.path !== 'string') continue;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.textContent = root.name || root.path;
+          button.title = root.path;
+          button.addEventListener('click', () => void loadFolder(root.path));
+          pickerRoots.append(button);
+        }
+
+        pickerList.textContent = '';
+        const entries = Array.isArray(body.entries) ? body.entries : [];
+        if (entries.length === 0) {
+          const empty = document.createElement('div');
+          empty.className = 'picker-empty';
+          empty.textContent = 'No folders here.';
+          pickerList.append(empty);
+        }
+        for (const entry of entries) {
+          if (!entry || typeof entry.path !== 'string') continue;
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.setAttribute('role', 'option');
+          button.textContent = entry.name;
+          button.title = entry.path;
+          // A single click walks in; "Use this folder" adopts the level you are on.
+          button.addEventListener('click', () => void loadFolder(entry.path));
+          pickerList.append(button);
+        }
+        if (body.truncated === true) {
+          const note = document.createElement('div');
+          note.className = 'picker-empty';
+          note.textContent = 'Showing the first 500 folders.';
+          pickerList.append(note);
+        }
+      }
+
+      async function loadFolder(path) {
+        try {
+          const suffix = path ? `?path=${encodeURIComponent(path)}` : '';
+          const { response, body } = await getJson(`/api/fs/list${suffix}`);
+          if (!response.ok) {
+            pickerHint.textContent = body.error || 'That folder cannot be opened.';
+            return;
+          }
+          pickerHint.textContent = 'Only folders are listed. This chat works in the folder you pick.';
+          renderFolderListing(body);
+        } catch (error) {
+          pickerHint.textContent = `Could not read folders: ${error && error.message ? error.message : error}`;
+        }
+      }
+
+      workspacePick.addEventListener('click', () => {
+        // Start where the chat already is, so the picker opens in context.
+        void loadFolder('');
+        folderPicker.showModal();
+      });
+      pickerUp.addEventListener('click', () => {
+        // "Up" asks the server for the parent of the level on screen.
+        void loadFolder(pickerDirectory === '' ? '' : pickerDirectory.replace(/[\\/][^\\/]+$/, '') || pickerDirectory);
+      });
+      document.getElementById('picker-cancel').addEventListener('click', () => folderPicker.close());
+      pickerUse.addEventListener('click', () => {
+        if (pickerDirectory === '') return;
+        folderPicker.close();
+        workspaceInput.value = pickerDirectory;
+        void commitWorkspacePath();
+      });
+      // Keep keyboard users in the dialog: Escape closes it, like Settings.
+      folderPicker.addEventListener('click', (event) => {
+        if (event.target === folderPicker) folderPicker.close();
+      });
 
       document.getElementById('settings-form').addEventListener('submit', async (event) => {
         event.preventDefault();

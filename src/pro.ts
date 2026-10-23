@@ -9,20 +9,6 @@ import type { AuditEvent } from './audit.ts';
  * Everything here is best-effort and never throws into a turn.
  */
 
-export interface ProStatus {
-  enabled: boolean;
-  source: 'flag' | 'env' | 'default';
-}
-
-export function proStatus(pro: boolean | undefined): ProStatus {
-  if (pro === true) return { enabled: true, source: 'flag' };
-  const env = process.env.VAELEN_PRO;
-  if (env !== undefined && env.trim() !== '' && !/^(0|false|no|off)$/i.test(env.trim())) {
-    return { enabled: true, source: 'env' };
-  }
-  return { enabled: false, source: 'default' };
-}
-
 export function filterAudit(entries: AuditEvent[], query: string): AuditEvent[] {
   const q = query.trim().toLowerCase();
   if (q === '') return entries;

@@ -31,7 +31,9 @@ function finiteMs(value: unknown): number | undefined {
 }
 
 export function formatDuration(ms: number): string {
-  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  // A missing duration used to print "NaNs": NaN survives Math.max/Min and lands
+  // in the seconds slot. Only a finite, positive value may reach the formatter.
+  const totalSec = Math.floor((Number.isFinite(ms) && ms > 0 ? ms : 0) / 1000);
   const h = Math.floor(totalSec / 3600);
   const m = Math.floor((totalSec % 3600) / 60);
   const s = totalSec % 60;

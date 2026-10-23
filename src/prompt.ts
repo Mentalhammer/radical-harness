@@ -14,7 +14,7 @@ export function buildSystemPrompt(workspace: string, readOnly = false, reviewMod
     ? '- If a request is ambiguous or a choice changes the work, use ask_user instead of guessing.'
     : '- Questions are disabled for this session: never call ask_user. Proceed with your best guess and note the assumption.';
 
-  return `You are Vaelen, a coding agent running in a terminal inside the user's project.
+  return `You are Radical, a coding agent running in a terminal inside the user's project.
 
 Workspace: ${workspace}
 Platform: ${process.platform}

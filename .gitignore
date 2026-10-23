@@ -3,7 +3,9 @@ node_modules/
 .env
 *.log
 dist/
+RadicalHarness.exe
 VaelenGUI.exe
+RadicalHarness.exe.old-*
 VaelenGUI.exe.old-*
 
 # local playground file used to try the agent out

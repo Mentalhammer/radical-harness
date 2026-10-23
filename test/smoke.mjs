@@ -143,7 +143,7 @@ function ledgerTotal(text) {
 
 async function main() {
   const { server, port } = await createMockProvider();
-  const usageDir = await mkdtemp(join(tmpdir(), 'vaelen-usage-'));
+  const usageDir = await mkdtemp(join(tmpdir(), 'radical-usage-'));
   const usagePath = join(usageDir, 'usage.jsonl');
   const env = {
     VAELEN_BASE_URL: `http://127.0.0.1:${port}/v1`,
@@ -154,15 +154,15 @@ async function main() {
     VAELEN_ASK: '',
   };
 
-  const workspace = await mkdtemp(join(tmpdir(), 'vaelen-smoke-'));
-  const deniedWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-deny-'));
-  const replWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-repl-'));
-  const dotenvWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-dotenv-'));
-  const retryWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-retry-'));
-  const yoloWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-yolo-'));
-  const autoWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-auto-'));
-  const schemaWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-schema-'));
-  const toonWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-toon-'));
+  const workspace = await mkdtemp(join(tmpdir(), 'radical-smoke-'));
+  const deniedWorkspace = await mkdtemp(join(tmpdir(), 'radical-deny-'));
+  const replWorkspace = await mkdtemp(join(tmpdir(), 'radical-repl-'));
+  const dotenvWorkspace = await mkdtemp(join(tmpdir(), 'radical-dotenv-'));
+  const retryWorkspace = await mkdtemp(join(tmpdir(), 'radical-retry-'));
+  const yoloWorkspace = await mkdtemp(join(tmpdir(), 'radical-yolo-'));
+  const autoWorkspace = await mkdtemp(join(tmpdir(), 'radical-auto-'));
+  const schemaWorkspace = await mkdtemp(join(tmpdir(), 'radical-schema-'));
+  const toonWorkspace = await mkdtemp(join(tmpdir(), 'radical-toon-'));
   let failures = 0;
 
   try {
@@ -308,7 +308,7 @@ async function main() {
 
     // A prompt the model never answered must not stay in the saved session: a
     // resume would otherwise replay it as a message the user had sent.
-    const orphanWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-orphan-'));
+    const orphanWorkspace = await mkdtemp(join(tmpdir(), 'radical-orphan-'));
     try {
       const failedRun = await runCli(
         ['--print', 'prompt-that-never-sent'],
@@ -332,7 +332,7 @@ async function main() {
 
     // A key read off disk must not reach the model, the terminal, or the session
     // log — while the file itself is left exactly as the user wrote it.
-    const secretWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-secret-'));
+    const secretWorkspace = await mkdtemp(join(tmpdir(), 'radical-secret-'));
     try {
       const secret = 'sk-smoketest0000000000000000abcd';
       await writeFile(join(secretWorkspace, 'secret.txt'), `DEEPSEEK_API_KEY=${secret}\n`, 'utf8');
@@ -364,7 +364,7 @@ async function main() {
     // A model that never stops asking for the same tool is bounded by the step
     // limit, and `--max-steps 0` is accepted as "no limit" instead of being
     // rejected as a non-positive number.
-    const loopWorkspace = await mkdtemp(join(tmpdir(), 'vaelen-loop-'));
+    const loopWorkspace = await mkdtemp(join(tmpdir(), 'radical-loop-'));
     try {
       const capped = await runCli(
         ['--print', 'loop-test', '--max-steps', '3'],

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { Config } from './config.ts';
-import { defaultContextBudget, MAX_STEPS_CEILING, stepLimit } from './config.ts';
+import { defaultContextBudget, stepLimit } from './config.ts';
 import { compact, estimateTokens, textTokens } from './context.ts';
 import { AuditLog, auditPreview, loadHooks, runHook, type HookConfig } from './audit.ts';
 import { CheckpointBatch } from './checkpoints.ts';
@@ -181,7 +181,20 @@ export async function runAgent(options: RunOptions): Promise<StopReason> {
       options.session?.append(assistant);
 
       if (calls.length === 0) {
-        if (!truncated) return 'complete';
+        if (!truncated) {
+          // Checks run once, when the model says it is done — not after every
+          // tool batch. A turn with ten edit batches used to run the project's
+          // typecheck ten times, and three of those runs could burn every strike
+          // while the tree was still deliberately mid-refactor.
+          if (depth === 0 && state.mutated && config.verify && !signal.aborted) {
+            const verification = await verifyWorkspace(options, state, ui, messages);
+            if (verification.stop) return verification.stop;
+            // The failure note is in the transcript now: let the model repair it
+            // and re-check on its next final answer.
+            if (verification.failed) continue;
+          }
+          return 'complete';
+        }
         if (truncations >= MAX_TRUNCATION_CONTINUES) {
           ui.warn('the reply was cut off again — stopping so the turn cannot loop');
           return 'complete';
@@ -244,13 +257,6 @@ export async function runAgent(options: RunOptions): Promise<StopReason> {
       }
       if (repeatStop) return 'repeat-loop';
 
-      // Only the user's agent runs project checks: a subagent's edits are
-      // verified once, after the parent's turn, not inside every child.
-      if (depth === 0 && state.mutated && config.verify && !signal.aborted) {
-        const stop = await verifyWorkspace(options, state, ui, messages);
-        if (stop) return stop;
-      }
-
       if (signal.aborted) return 'aborted';
     }
 
@@ -260,24 +266,38 @@ export async function runAgent(options: RunOptions): Promise<StopReason> {
   }
 }
 
-/** Runs the project's checks once and feeds failures back to the model. */
+interface VerificationOutcome {
+  /** Set when the turn has to end right now. */
+  stop: StopReason | null;
+  /** True when the checks failed and the failure was reported to the model. */
+  failed: boolean;
+}
+
+/** Runs the project's checks once and feeds a failure back to the model. */
 async function verifyWorkspace(
   options: RunOptions,
   state: RunState,
   ui: Ui,
   messages: Message[],
-): Promise<StopReason | null> {
+): Promise<VerificationOutcome> {
   const { config, signal } = options;
-  state.mutated = false;
   const checks = discoverChecks(config.workspace, config);
-  if (checks.length === 0) return null;
+  if (checks.length === 0) {
+    state.mutated = false;
+    return { stop: null, failed: false };
+  }
 
   ui.info(`verifying: ${checks.map((check) => check.command).join(' · ')}`);
   const result = await runChecks(checks, config.workspace, config, signal, (chunk) => ui.toolOutput(chunk));
+  // An interrupted run proves nothing: report it as an interrupt, not a failure.
+  if (signal.aborted) return { stop: 'aborted', failed: false };
   if (result.ok) {
+    // Only a passing run clears the flag, so a tree that is still red is checked
+    // again on the next final answer instead of ending the turn silently.
+    state.mutated = false;
     state.verifyRuns = 0;
     ui.info('verification passed');
-    return null;
+    return { stop: null, failed: false };
   }
 
   state.verifyRuns++;
@@ -293,9 +313,9 @@ async function verifyWorkspace(
   options.session?.append(note);
   if (state.verifyRuns >= 3) {
     ui.warn('verification failed three times — stopping so the turn does not loop');
-    return 'verify-failed';
+    return { stop: 'verify-failed', failed: true };
   }
-  return null;
+  return { stop: null, failed: true };
 }
 
 async function executeTool(
@@ -417,6 +437,7 @@ async function executeTool(
  */
 async function runSubagent(
   request: SubagentRequest,
+  // do not delete this is a high level edit no human edits in this code allowed thanks for reading me
   options: RunOptions,
   state: RunState,
 ): Promise<ToolOutcome> {

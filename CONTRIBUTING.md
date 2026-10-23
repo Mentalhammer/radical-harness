@@ -1,12 +1,12 @@
 # Contributing
 
-Thanks for looking. Vaelen is a small harness, and it is kept that way on purpose: no runtime dependencies, no build step for the CLI, TypeScript sources executed directly through Node's type stripping.
+Thanks for looking. Radical is a small harness, and it is kept that way on purpose: no runtime dependencies, no build step for the CLI, TypeScript sources executed directly through Node's type stripping.
 
 ## Setup
 
 ```bash
 git clone <your-fork>
-cd vaelen
+cd radical
 npm install            # dev deps only: typescript, @types/node, esbuild, postject
 npm run typecheck
 npm run test:unit
@@ -30,9 +30,11 @@ Node.js **22.18+** (24 recommended) and `bash` on `PATH` (Git Bash on Windows) a
 | `npm run test:unit` | in-process units: tools, context compaction, config, sessions, ledgers |
 | `npm run smoke` | the real CLI against a mock OpenAI-compatible server: streaming, tool calls, approvals, timeouts, REPL |
 | `npm run test:stress` | 40k-message compaction, four concurrent ledger writers, stale locks |
+| `npm run test:harden` | 50 seeded adversarial passes: SSE frame splitting, TOON round-trip, tool arguments, compaction, schema blow-ups, agent termination |
+| `npm run test:harden -- --passes 500 --seed 7` | longer soak with a fixed seed that replays any failure exactly |
 | `npm run test:edrive` | Windows-only throughput check on a second drive |
 | `npm run test:gui -- --bundle` | the window over HTTP/SSE, after `node scripts/build-gui.mjs` |
-| `npm run test:gui` | same suite against a packaged `VaelenGUI.exe` |
+| `npm run test:gui` | same suite against a packaged `RadicalHarness.exe` |
 
 `npm test` runs everything including the E-drive stress test, so it expects a Windows box with an `E:` drive. The suite that must stay green everywhere else is:
 

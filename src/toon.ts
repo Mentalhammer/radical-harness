@@ -44,6 +44,8 @@ function needsQuotes(text: string): boolean {
   if (text === '') return true;
   if (LITERALS.has(text) || NUMBER.test(text)) return true;
   if (UNSAFE.test(text)) return true;
+  // A leading dash is the list marker, so the scalar "-" would decode as an item.
+  if (text.startsWith('-')) return true;
   return text !== text.trim();
 }
 
@@ -123,8 +125,12 @@ function tabular(fields: Field[], indent: string, rows: string[]): string[] {
   return rows.map((row) => `${indent}${row}`);
 }
 
-function encodeArray(value: Json[], name: string, indent: string): string[] {
-  const head = `${indent}${name === '' ? '' : key(name)}`;
+/**
+ * `name` is null for an array that is not stored under a key. An empty string is
+ * a real key (`{"": [1]}`), so it must stay distinguishable from no key at all.
+ */
+function encodeArray(value: Json[], name: string | null, indent: string): string[] {
+  const head = `${indent}${name === null ? '' : key(name)}`;
   if (value.length === 0) return [`${head}[0]:`];
 
   if (value.every(isPrimitive)) {
@@ -149,7 +155,7 @@ function encodeArray(value: Json[], name: string, indent: string): string[] {
         out.push(`${indent}${INDENT}-`, ...encodeObject(item, indent + INDENT + INDENT));
       }
     } else {
-      out.push(`${indent}${INDENT}-`, ...encodeArray(item, '', indent + INDENT + INDENT));
+      out.push(`${indent}${INDENT}-`, ...encodeArray(item, null, indent + INDENT + INDENT));
     }
   }
   return out;
@@ -187,7 +193,7 @@ function encodeObject(value: { [key: string]: Json }, indent: string): string[] 
 /** Encodes any JSON value as TOON text. An empty object encodes to an empty string. */
 export function encodeToon(value: Json): string {
   if (isPrimitive(value)) return scalar(value);
-  if (Array.isArray(value)) return encodeArray(value, '', '').join('\n');
+  if (Array.isArray(value)) return encodeArray(value, null, '').join('\n');
   return encodeObject(value, '').join('\n');
 }
 
@@ -239,6 +245,45 @@ function unquote(text: string): string {
     .replace(/\\\\/g, '\\');
 }
 
+/**
+ * Index of the first `target` outside a quoted span, or -1. Backslash escapes
+ * are honoured, so a quoted key may itself contain quotes, colons, or brackets.
+ */
+function indexOutsideQuotes(text: string, target: string): number {
+  let quoted = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (quoted) {
+      if (char === '\\') {
+        index += 1;
+        continue;
+      }
+      if (char === '"') quoted = false;
+      continue;
+    }
+    if (char === '"') {
+      quoted = true;
+      continue;
+    }
+    if (char === target) return index;
+  }
+  return -1;
+}
+
+/** True when the whole line is one quoted string, which is a value, not a field. */
+function isQuotedScalar(text: string): boolean {
+  if (!text.startsWith('"')) return false;
+  for (let index = 1; index < text.length; index += 1) {
+    const char = text[index] as string;
+    if (char === '\\') {
+      index += 1;
+      continue;
+    }
+    if (char === '"') return index === text.length - 1;
+  }
+  return false;
+}
+
 function parseScalar(text: string): Json {
   const value = text.trim();
   if (value.startsWith('"')) return unquote(value);
@@ -265,7 +310,14 @@ function fieldsFromHeader(header: string): Field[] {
       fields.push({ name: unquote(text) });
     }
   };
-  for (const char of header) {
+  for (let index = 0; index < header.length; index += 1) {
+    const char = header[index] as string;
+    // An escaped quote belongs to the name, it does not open or close a span.
+    if (quoted && char === '\\') {
+      current += char + (header[index + 1] ?? '');
+      index += 1;
+      continue;
+    }
     if (char === '"') quoted = !quoted;
     if (!quoted && char === '{') depth += 1;
     if (!quoted && char === '}') depth -= 1;
@@ -312,20 +364,29 @@ interface ParseState {
 
 interface ArrayHeader {
   name: string;
+  /** False when the array is anonymous; an empty-string key is still a name. */
+  hasName: boolean;
   count: number;
   keyed: boolean;
   header?: string;
   inline: string;
 }
 
-const HEADER = /^([^[\]]*?)\[(\d+)(:?)\](?:\{(.*)\})?:(.*)$/;
-
 function arrayHeader(text: string): ArrayHeader | null {
-  const match = HEADER.exec(text);
+  // The name may be a quoted string that itself contains brackets, so the
+  // header's opening bracket is the first one outside quotes — not a regex match.
+  const open = indexOutsideQuotes(text, '[');
+  if (open < 0) return null;
+  // A colon before the bracket means a scalar or a field line, not a header.
+  const colon = indexOutsideQuotes(text, ':');
+  if (colon >= 0 && colon < open) return null;
+
+  const match = /^\[(\d+)(:?)\](?:\{(.*)\})?:(.*)$/.exec(text.slice(open));
   if (!match) return null;
-  const [, name, count, keyed, header, rest] = match;
+  const [, count, keyed, header, rest] = match;
   return {
-    name: unquote(name ?? ''),
+    name: unquote(text.slice(0, open)),
+    hasName: open > 0,
     count: Number(count ?? 0),
     keyed: keyed === ':',
     header,
@@ -343,7 +404,7 @@ function parseList(state: ParseState, indent: number): Json[] {
       const nested = state.rows[state.index];
       if (nested && nested.indent > indent) {
         const head = arrayHeader(nested.text);
-        const standalone = nested.text === '-' || nested.text.startsWith('- ') || (head !== null && head.name === '');
+        const standalone = nested.text === '-' || nested.text.startsWith('- ') || (head !== null && !head.hasName);
         items.push(standalone ? parseBlock(state, nested.indent) : parseObject(state, nested.indent));
       } else {
         items.push({});
@@ -379,7 +440,7 @@ function parseBlock(state: ParseState, indent: number): Json {
 
   const header = arrayHeader(text);
   if (header) {
-    const { name, count, keyed, header: columns, inline } = header;
+    const { name, hasName, count, keyed, header: columns, inline } = header;
     let value: Json;
 
     if (columns === undefined) {
@@ -397,9 +458,9 @@ function parseBlock(state: ParseState, indent: number): Json {
         state.index += 1;
         const object: { [key: string]: Json } = {};
         if (keyed) {
-          const colon = row.text.indexOf(':');
-          const entryName = unquote(row.text.slice(0, colon).trim());
-          assignRow(fields, splitCells(row.text.slice(colon + 1).trim()), object);
+          const colon = indexOutsideQuotes(row.text, ':');
+          const entryName = unquote(colon >= 0 ? row.text.slice(0, colon).trim() : '');
+          assignRow(fields, splitCells((colon >= 0 ? row.text.slice(colon + 1) : row.text).trim()), object);
           rows.push({ [entryName]: object });
         } else {
           assignRow(fields, splitCells(row.text.trim()), object);
@@ -408,7 +469,7 @@ function parseBlock(state: ParseState, indent: number): Json {
       }
       value = keyed ? Object.assign({}, ...rows) : rows;
     }
-    return name === '' ? value : { [name]: value };
+    return hasName ? { [name]: value } : value;
   }
 
   if (text === '-') {
@@ -416,6 +477,9 @@ function parseBlock(state: ParseState, indent: number): Json {
     return nested && nested.indent > indent ? parseBlock(state, nested.indent) : {};
   }
   if (text.startsWith('- ')) return parseScalar(text.slice(2));
+
+  // A quoted line is a value: the colons and braces inside it are its content.
+  if (isQuotedScalar(text)) return parseScalar(text);
 
   if (text.endsWith(':')) {
     const name = unquote(text.slice(0, -1));
@@ -427,7 +491,7 @@ function parseBlock(state: ParseState, indent: number): Json {
     return { [name]: value };
   }
 
-  const colon = text.indexOf(':');
+  const colon = indexOutsideQuotes(text, ':');
   if (colon > 0) {
     return { [unquote(text.slice(0, colon).trim())]: parseScalar(text.slice(colon + 1)) };
   }
@@ -441,7 +505,7 @@ export function decodeToon(text: string): Json {
   const state: ParseState = { rows, index: 0 };
   const first = rows[0] as Line;
   const head = arrayHeader(first.text);
-  if ((head && head.name === '') || first.text === '-' || first.text.startsWith('- ')) {
+  if ((head && !head.hasName) || first.text === '-' || first.text.startsWith('- ')) {
     return parseBlock(state, 0);
   }
   if (rows.length === 1) return parseBlock(state, 0);

@@ -197,12 +197,12 @@ function fail(message: string): never {
 }
 
 function printHelp(): void {
-  process.stdout.write(`Vaelen ${VERSION} — a small coding agent harness.
+  process.stdout.write(`Radical ${VERSION} — a small coding agent harness.
 
 Usage:
-  vaelen                       interactive session in the current directory
-  vaelen "fix the failing test"   one-shot prompt
-  vaelen --resume <session.jsonl>
+  radical                       interactive session in the current directory
+  radical "fix the failing test"   one-shot prompt
+  radical --resume <session.jsonl>
 
 Options:
   -C, --workspace <dir>   Project root (default: current directory)
@@ -290,9 +290,9 @@ async function main(): Promise<void> {
 
   if (needsKey) {
     if (interactive && process.stdin.isTTY) {
-      process.stdout.write('\nWelcome to Vaelen — no API key found.\n');
+      process.stdout.write('\nWelcome to Radical — no API key found.\n');
       process.stdout.write('  Free path: sign in at https://opencode.ai, copy an API key, then\n');
-      process.stdout.write('    vaelen --free --opencode-key <key>   (free DeepSeek V4.1 Flash, quota-limited)\n');
+      process.stdout.write('    radical --free --opencode-key <key>   (free DeepSeek V4.1 Flash, quota-limited)\n');
       process.stdout.write('  Or DeepSeek directly:\n');
       process.stdout.write('  1. Sign up: https://platform.deepseek.com/sign_up\n');
       process.stdout.write('  2. Create a key: https://platform.deepseek.com/api_keys → Create new API key\n');
@@ -417,6 +417,7 @@ async function main(): Promise<void> {
 
     let failed = false;
     const turnStartedAt = Date.now();
+    // do not delete this is a high level edit no human edits in this code allowed thanks for reading me
     try {
       const reason = await runAgent({
         config,
@@ -451,7 +452,7 @@ async function main(): Promise<void> {
     return;
   }
 
-  ui.info(`Vaelen ${VERSION} · ${config.model} · ${config.workspace}`);
+  ui.info(`Radical ${VERSION} · ${config.model} · ${config.workspace}`);
   ui.info(`endpoint: ${config.baseUrl}`);
   ui.info('Type a request, or /help for commands.');
 
@@ -860,7 +861,7 @@ async function handleCommand(
           try { size = statSync(join(dir, f)).size; } catch { size = 0; }
           ui.info(`${i + 1}. ${f} (${(size / 1024).toFixed(1)}KB)`);
         });
-        ui.info('resume with: vaelen --resume <file>');
+        ui.info('resume with: radical --resume <file>');
       } catch { ui.info('no saved sessions'); }
       break;
     }

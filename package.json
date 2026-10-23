@@ -1,5 +1,5 @@
 {
-  "name": "vaelen-harness",
+  "name": "radical-harness",
   "version": "0.1.0",
   "private": true,
   "description": "A small, dependency-free coding agent harness for the terminal.",
@@ -13,7 +13,7 @@
   ],
   "type": "module",
   "bin": {
-    "vaelen": "./src/index.ts"
+    "radical": "./src/index.ts"
   },
   "engines": {
     "node": ">=22.18"
@@ -24,6 +24,7 @@
     "typecheck": "tsc --noEmit",
     "test": "node test/unit.mjs && node test/smoke.mjs && node test/stress.mjs && node test/e-drive-stress.mjs",
     "test:ci": "node test/unit.mjs && node test/smoke.mjs && node test/stress.mjs",
+    "test:harden": "node test/harden.mjs",
     "test:edrive": "node test/e-drive-stress.mjs",
     "test:unit": "node test/unit.mjs",
     "test:stress": "node test/stress.mjs",

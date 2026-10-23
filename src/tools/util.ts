@@ -5,6 +5,18 @@ export class ToolError extends Error {
   }
 }
 
+/**
+ * Wrap a filesystem side effect. The OS reports failures as plain Errors whose
+ * message can embed a multi-kilobyte path, which would land in the transcript
+ * verbatim. A ToolError keeps the model's view short and marks the failure as a
+ * refusal rather than an internal break.
+ */
+export function filesystemError(summary: string, error: unknown): ToolError {
+  if (error instanceof ToolError) return error;
+  const reason = error instanceof Error ? error.message : String(error);
+  return new ToolError(truncate(`${summary}: ${reason}`, 400));
+}
+
 export function requiredString(args: Record<string, unknown>, key: string): string {
   const value = args[key];
   if (typeof value !== 'string' || value.trim() === '') {

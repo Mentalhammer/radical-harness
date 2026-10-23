@@ -54,6 +54,12 @@ function isReadOnlyGit(words: string[]): boolean {
   return READ_ONLY_GIT.has(sub);
 }
 
+// Shell builtins that only move the working directory. They cannot write a file
+// or run a command, so `cd repo && grep foo src` is inspection, not mutation —
+// and the bash tool spawns a fresh shell per call, so the change never outlives
+// the command line it appears on.
+const NAVIGATION_BINARIES = new Set(['cd', 'pushd', 'popd']);
+
 /** Binaries with a read-only default but flags that write a file or run a command. */
 function hasWriteFlag(words: string[]): boolean {
   const bin = words[0] ?? '';
@@ -266,6 +272,7 @@ export function isReadOnlyCommand(command: string): boolean {
     const words = part.split(/\s+/);
     const bin = words[0];
     if (!bin) return false;
+    if (NAVIGATION_BINARIES.has(bin)) return true;
     if (bin === 'git') {
       // `--output` turns otherwise-read subcommands into file writers.
       if (words.some((word) => word === '--output' || word.startsWith('--output='))) return false;
@@ -334,19 +341,24 @@ export class Permissions {
     this.#handler = options.handler;
   }
 
-  /** Resolves a path and refuses anything that escapes the workspace. */
+  /**
+   * Resolves a path against the workspace and canonicalises it.
+   *
+   * The workspace is a *default root*, not a fence: relative paths start there,
+   * and an absolute path or an `../` may deliberately leave it. Symlinks are
+   * still resolved, so a caller always gets the real file it will touch — but
+   * that resolution no longer rejects anything for being outside.
+   *
+   * What remains restricted is orthogonal: `approveWrite` refuses system
+   * locations, read-only mode refuses every write, and `systemRisk` blocks
+   * disk/boot/registry/service operations.
+   */
   resolvePath(input: string, _mode: 'read' | 'write'): string {
     if (typeof input !== 'string' || input.trim() === '') {
       throw new PermissionError('Path must be a non-empty string');
     }
     const absolute = isAbsolute(input) ? resolve(input) : resolve(this.workspace, input);
-    // Resolve symlinks before checking: a link inside the workspace that points
-    // outside would otherwise pass the string-prefix test.
-    const canonical = realPath(absolute);
-    if (!this.isInside(canonical)) {
-      throw new PermissionError(`Path escapes the workspace: ${input}`);
-    }
-    return canonical;
+    return realPath(absolute);
   }
 
   isInside(target: string): boolean {

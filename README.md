@@ -1,4 +1,4 @@
-# Vaelen
+# Radical
 
 A small coding agent harness for the terminal. It runs a model against your project with real file and shell access, streams output, runs commands without asking, refuses system-level operations, and saves every session to disk.
 
@@ -26,7 +26,7 @@ A small coding agent harness for the terminal. It runs a model against your proj
 ## Quick start
 
 ```bash
-git clone <your-fork> vaelen && cd vaelen
+git clone <your-fork> radical && cd radical
 npm install                  # dev deps only: typescript + @types/node
 
 export DEEPSEEK_API_KEY=sk-...
@@ -38,29 +38,29 @@ That is the whole setup: the harness defaults to DeepSeek (`https://api.deepseek
 One-shot mode, useful in scripts:
 
 ```bash
-node /path/to/vaelen/src/index.ts -C /path/to/project -p "explain src/agent.ts"
+node /path/to/radical/src/index.ts -C /path/to/project -p "explain src/agent.ts"
 ```
 
 Optional global command:
 
 ```bash
-cd vaelen
-npm link                     # then: vaelen
+cd radical
+npm link                     # then: radical
 ```
 
 ## GUI (Windows exe)
 
 ```bash
-npm run exe          # → VaelenGUI.exe in the project root
+npm run exe          # → RadicalHarness.exe in the project root
 ```
 
 A single self-contained executable (~90 MB — it embeds Node via Node SEA). It defaults to DeepSeek + `deepseek-flash`, starts a server on `127.0.0.1` with a random port and access token, then opens its own window:
-- **Double-click** `VaelenGUI.exe` — the workspace defaults to the folder containing the exe. The exe is built as a windowed (PE subsystem 2) app, so no console window opens; startup output, including the URL with the access token redacted, is appended to `~/.vaelen/gui.log`.
-- **Command line** — `VaelenGUI.exe --workspace E:\projects\my-app --api-key sk-...`
+- **Double-click** `RadicalHarness.exe` — the workspace defaults to the folder containing the exe. The exe is built as a windowed (PE subsystem 2) app, so no console window opens; startup output, including the URL with the access token redacted, is appended to `~/.vaelen/gui.log`.
+- **Command line** — `RadicalHarness.exe --workspace E:\projects\my-app --api-key sk-...`
 - **First run** — the connection dialog opens by itself when no key is found, with a link to `platform.deepseek.com`. Paste once and it is saved for future sessions. The server listens on a fixed local port (`47821`, override with `--port`), so the window remembers the key between launches. If that port is taken, it falls back to a random one.
 - **Change it live** — the project folder is an editable field in the header: type a path, press **Enter** (or click away) to move *this chat*, and **Escape** puts the old one back. Re-entering the folder a chat already has is a no-op, so a stray Enter never resets a transcript, and a rejected path is reported and reverted. Other chats keep their own project and keep running. Settings takes Base URL, Model, context budget, steps per turn, and API key.
 - **GitHub repositories** — the default is **no repository**: the chat works in the folder it was launched in. Settings → Repository takes `owner/name` (or a GitHub URL), clones it shallowly into `~/.vaelen/repos/<owner>/<name>` on first use, and points **this chat** at the clone; later opens reuse it. Below it is the history of repositories opened before, newest first, with **Open** and **×** (forget the entry, keep the clone), plus **Load my GitHub repositories** when the GitHub CLI is signed in. Private repositories need `gh auth login`; public ones clone over HTTPS either way. The open repository shows as a badge in the header, and **Close** returns to the local folder you came from. History lives in `~/.vaelen/repos.json`.
-- **Context meter** — a slim bar above the header tracks the estimated transcript size against `contextBudget`, refreshing at the end of every turn and after a workspace switch or new chat. It shifts amber past 70% and red past 90%, and hovering it shows the exact token counts, the compaction point, and the model's real window. The `N lifetime` counter on the right edge is the running total across every session ever run on this machine; hover it for requests, sessions, estimated counts, the start date, and the ledger path.
+- **Context meter** — a slim bar above the header tracks the estimated transcript size against `contextBudget`, refreshing at the end of every turn and after a workspace switch or new chat. It shifts amber past 70% and red past 90%, and hovering it shows the exact token counts, the compaction point, and the model's real window. The `N lifetime` counter on the right edge is the running total across every session ever run on this machine; hover it for requests, sessions, estimated counts, the start date, and the ledger path. The `N working` clock sums every chat running at once, so two parallel turns stack: ten seconds each add twenty seconds while they run, not only when they finish.
 - **Read/Edit toggle** — the header switch flips the session between inspection and editing. Read mode advertises only the read-only tools, blocks writes and state-changing commands before the approval prompt, and tells the model to ask for Edit before proposing a change. The choice is process-wide, so the toggle waits until every chat is idle, and it lasts for the process.
 - **Auto/Ask toggle** — the header switch controls whether the model may ask you clarifying questions (nothing to do with file approvals). **Auto = no questions**: `ask_user` is hidden and the model proceeds with its best guess, noting the assumption. **Ask = the model may pause with high-level clarifying questions** via `ask_user` when a request is ambiguous. On by default (Ask), process-wide, waits for idle like Read/Edit, session-only. The CLI mirrors it with `/ask [auto|ask]`.
 - **Search every chat** — the rail's search box filters chat titles as you type and, after a short pause, searches the *contents* of every transcript in every project: your prompts, the model's replies, tool arguments (commands, paths, patches), and tool output (test failures, stack traces). Click a result to open that chat and scroll to the exact message, which flashes briefly. Results are ranked by how many of your terms a message covers, then by how recent the chat is.
@@ -71,6 +71,7 @@ A single self-contained executable (~90 MB — it embeds Node via Node SEA). It 
 
   Every chat owns its transcript, turn, steering queue, and pending approvals (`src/gui/server.ts`), so two chats can run at the same time in one window: every rail row carries a status dot — hollow while idle, pulsing green while that chat is working, amber while it waits on an approval card. Switching tabs mid-turn is allowed — the running chat keeps streaming in the background, and its events are tagged with the chat id so they never land in the chat you are reading. Switching to a running chat reattaches to its live transcript (including text streamed so far and any pending approval), rather than reloading a stale file. Starting a second turn in the same chat is still refused: steer it instead. Workspace and repository changes, and the Read/Edit toggle, wait until every chat is idle. Chats that share a project share a filesystem, so two turns editing the same file can still race — keep parallel work on separate areas of the project, or on separate chats with separate projects.
 - **Delete / recover** — the **×** on a tab (shown on hover) moves that chat out of the rail; deleting the open chat leaves the window on a fresh conversation. Files are moved to `<workspace>/.vaelen/trash/` rather than deleted, and **↺** at the top of the rail restores the most recently deleted chat, so a misclick is undoable even after a restart. The button is disabled while the trash is empty. Deleting a chat whose own turn is running is refused (stop it first); other chats may be deleted and recovered while a turn runs.
+- **Current prompt** — a slim bar between the header and the transcript pins the open chat's latest message so the ask stays visible while you scroll back through a long answer. It follows chat switches and hides on a chat with no prompt yet; long prompts clip to one line with the full text in the tooltip, and a message that is only attachments shows their filenames.
 
 ### The window
 
@@ -85,6 +86,8 @@ Output follows the newest text as it streams. Scrolling up leaves the view where
 While the open chat's turn runs, the composer stays live and **Enter steers it**: the text joins that conversation at the model's next step — marked `STEERING` in the transcript — instead of starting a new turn, and the turn keeps going with the correction in context. Steering is text only; attachments wait for the next message (or press Stop). Guidance that arrives as the reply finishes gets one more leg, so it is never left unanswered.
 
 The composer follows the DeepSeek web input: it grows with the text, **Enter** sends, **Shift+Enter** adds a line, **Ctrl/Cmd+Enter** also sends, and an Enter pressed while an IME is composing never sends. The textarea stays editable while a turn streams, and the unfinished draft is kept per workspace in `localStorage` across reloads. Attach with **+**, paste, or drag and drop — dropping a folder walks it (skipping `node_modules`, `.git`, `dist`, and similar) and stages the images and text files inside, up to the same file limit; the **camera button** in the composer opens the browser's screen/window picker, grabs a single frame, and stages it as a PNG named `screenshot-<timestamp>.png` (sharing stops immediately; the image is capped at 2560 px on the long side to stay inside the 8 MB limit). Staged files show removable chips before sending. Images (PNG/JPEG/WebP/GIF) are stored under `<workspace>/.vaelen/attachments/` and sent as OpenAI `image_url` content parts; text files are inlined into the prompt. A paste longer than 8,000 characters or 200 lines becomes a text attachment instead of filling the box. Limits are 6 files, 8 MB per image, 1 MB of text per file, and 12 MB total. Image support still depends on the model behind the endpoint — a text-only provider will reject the request, in which case remove the image.
+
+Keys: **Ctrl+F** (Cmd+F) jumps to a find box in the header that searches the open conversation — Enter and Shift+Enter step through matches, Escape clears it — and **Ctrl+K** focuses the chat search in the rail.
 
 Key handling: saving in Settings writes the key, endpoint, and model to `~/.vaelen/config.json` (plain text, created with mode `600` where the OS honors it), so every new session — CLI or GUI — reconnects with no further input. The browser also caches the key in `localStorage` as a fallback when the server starts without one. The endpoint requires the token from the startup URL, so other local pages cannot drive the agent. The exe is unsigned, so Windows SmartScreen will warn on first run.
 
@@ -124,7 +127,7 @@ New chats pick `deepseek-v4.1-flash-free` on `https://opencode.ai/inference/open
 automatically when no DeepSeek key is set but an OpenCode key exists (same as
 OpenCode's own `*-free` models: restricted to their proxy, quota-limited, resets
 periodically). FreeBuff works the same way — a hosted proxy with its own key,
-not the DeepSeek API directly — so Vaelen cannot reuse FreeBuff's free backend
+not the DeepSeek API directly — so Radical cannot reuse FreeBuff's free backend
 without their server; OpenCode's proxy is the supported free path. Explicit
 `--model`/`--base-url`/`--api-key` always win over the free default.
 
@@ -141,6 +144,11 @@ node src/index.ts --base-url http://127.0.0.1:11434/v1 --api-key ollama --model 
 ```
 
 Config resolution order: CLI flag → environment variable → `~/.vaelen/config.json` → default.
+
+The `~/.vaelen/` data directory and the `VAELEN_*` environment variables keep
+their original names, so configuration, sessions, and ledgers written by earlier
+builds keep working. Only the product name, the command, and the executable
+changed to Radical.
 
 | Env var | Meaning |
 |---|---|
@@ -200,12 +208,12 @@ The file is a journal of small delta lines plus periodic checkpoint lines, writt
 
 | Command | Effect |
 |---|---|
-| `vaelen` | interactive REPL in the current directory |
-| `vaelen "prompt"` | one-shot turn, exits when the turn ends |
-| `vaelen --resume .vaelen/sessions/<file>.jsonl` | continue a saved conversation |
-| `vaelen -C ../other-repo` | point at another workspace |
-| `vaelen --ask` | ask before writes and commands that are not provably read-only |
-| `vaelen --yolo` | skip approval prompts (same as the default policy) |
+| `radical` | interactive REPL in the current directory |
+| `radical "prompt"` | one-shot turn, exits when the turn ends |
+| `radical --resume .vaelen/sessions/<file>.jsonl` | continue a saved conversation |
+| `radical -C ../other-repo` | point at another workspace |
+| `radical --ask` | ask before writes and commands that are not provably read-only |
+| `radical --yolo` | skip approval prompts (same as the default policy) |
 
 REPL commands: `/help`, `/clear`, `/model <name>`, `/context`, `/usage`, `/session`, `/tools`, `/undo`, `/audit [n] [query]`, `/map [query]`, `/checkpoints`, `/verify`, `/compact`, `/export [md|json|audit]`, `/validate <file>`, `/toon <file>`, `/chats`, `/cd <dir>`, `/resume`, `/budget [n]`, `/review`, `/exit`.
 Ctrl+C interrupts the running turn; press it again at the prompt to quit. End a line with `\` to continue on the next one.
@@ -260,7 +268,7 @@ Fixed per-request overhead (system prompt plus tool schemas) was 1,635 tokens be
 The default is **allow everything, ask nothing**, with one exception: operations that would damage the machine itself are refused outright, even with `--yolo`.
 
 - **Reads** inside the workspace run freely.
-- **Writes** inside the workspace run freely and do not prompt under the default policy. Paths outside the workspace are rejected; writes into OS directories (`C:\Windows`, `C:\Program Files`, `C:\ProgramData`, `/etc`, `/usr`, `/boot`, …) are refused even if the workspace itself is opened there.
+- **Writes** run freely and do not prompt under the default policy. The workspace is a starting point, not a fence: a relative path begins there, while an absolute path or `..` may leave it on purpose, and symlinks are resolved so a tool always touches the real file. Writes into OS directories (`C:\Windows`, `C:\Program Files`, `C:\ProgramData`, `/etc`, `/usr`, `/boot`, …) are still refused, as are disk, boot, registry, service, and account operations.
 - **Commands** run without asking, including `rm`, `git commit`, package managers, and scripts.
 - **Always refused** (no approval prompt, no override): disk formatting/partitioning (`format`, `diskpart`, `fdisk`, `parted`, `mkfs`, `dd`), power and boot changes (`shutdown`, `reboot`, `bcdedit`, `bootrec`), registry writes (`reg add/delete/import`, `HKLM:`/`HKCU:`), system services and accounts (`sc create/delete`, `net user`), Windows system tools (`sfc`, `dism`, `vssadmin`, `wbadmin`), privilege escalation (`sudo`, `doas`, `runas`), deleting a drive root, `/`, `~`, or an OS directory, and redirecting output into one.
 - **`--ask`** (or `VAELEN_ASK=1`) restores the old behavior: a `[y] once / [a] always / [n] no` prompt for every write and every command that is not provably read-only. The GUI shows approval cards in that mode, and an empty answer or EOF denies rather than approves. Even then, system-level operations are blocked rather than offered.
@@ -316,7 +324,7 @@ npm run typecheck    # tsc --noEmit
 npm test             # unit + CLI smoke + stress + E-drive stress
 npm run test:stress  # compaction scaling and concurrent ledger writers on their own
 npm run test:edrive  # E-drive throughput: repomap, checkpoints, audit, compaction, export
-npm run test:gui     # GUI smoke against VaelenGUI.exe (build it first)
+npm run test:gui     # GUI smoke against RadicalHarness.exe (build it first)
 npm run test:gui -- --bundle   # same test against node dist/gui.cjs
 ```
 
@@ -348,6 +356,6 @@ Bug reports, platform fixes, and new tools are welcome. [CONTRIBUTING.md](CONTRI
 
 ## License
 
-[MIT](LICENSE) © Vaelen contributors.
+[MIT](LICENSE) © Radical contributors.
 
 The Windows executable embeds a Node.js runtime, whose licence travels with it — see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md). Builds are unsigned; each release ships a SHA-256 checksum, and `npm run exe` reproduces the binary from source.

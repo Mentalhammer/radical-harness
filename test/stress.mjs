@@ -41,7 +41,7 @@ test('compaction of a very long transcript is linear and stays under budget', ()
 });
 
 test('concurrent processes cannot lose or double-count ledger entries', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-usage-race-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-usage-race-'));
   const ledger = join(dir, 'usage.jsonl');
   const script = join(dir, 'writer.mjs');
   try {
@@ -90,7 +90,7 @@ test('concurrent processes cannot lose or double-count ledger entries', async ()
 });
 
 test('a lock left by a crashed process is broken, not fatal', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-usage-lock-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-usage-lock-'));
   const ledger = join(dir, 'usage.jsonl');
   try {
     await writeFile(`${ledger}.lock`, '1234 dead', 'utf8');
@@ -109,7 +109,7 @@ test('a lock left by a crashed process is broken, not fatal', async () => {
 });
 
 test('an unwritable ledger never throws into the agent', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-usage-readonly-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-usage-readonly-'));
   try {
     const blocker = join(dir, 'not-a-directory');
     await writeFile(blocker, 'x', 'utf8');

@@ -34,6 +34,8 @@ jobs:
       - run: npm run test:unit
       - run: npm run smoke
       - run: npm run test:stress
+      - name: Adversarial passes
+        run: node test/harden.mjs --passes 15
 
   gui:
     name: GUI smoke (Windows, bundled server)

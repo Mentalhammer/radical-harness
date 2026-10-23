@@ -1,4 +1,4 @@
-# Testing on Windows — Vaelen harness
+# Testing on Windows — Radical harness
 
 All commands run in **Git Bash** (or PowerShell — same commands work).
 Project root in this guide: `E:\radicalharness`.
@@ -26,7 +26,7 @@ git --version
 ## 2. Install (one-time per checkout)
 
 ```bash
-cd /path/to/vaelen
+cd /path/to/radical
 npm install
 ```
 
@@ -44,14 +44,14 @@ The harness itself has zero runtime dependencies.
 | 5 | `node test/smoke.mjs` | CLI + mock provider (timeouts, retries, ledger) | passed |
 | 6 | `npm run test:stress && npm run test:edrive` | 5 stress + 7 E-drive (repomap, checkpoints, audit, compaction, export) | 5 + 7 passed |
 | 7 | `npm run test:gui -- --bundle` | GUI server over HTTP/SSE (auth, turns, read-mode, attachments, approvals) | passed |
-| 8 | `npm run exe` | SEA bundle → `VaelenGUI.exe` (~90 MB) | ok, 94,368,256 bytes |
+| 8 | `npm run exe` | SEA bundle → `RadicalHarness.exe` (~90 MB) | ok, 94,368,256 bytes |
 | 9 | `npm run test:gui` (no `--bundle`) | same GUI suite against the real exe | run before shipping |
 | 10 | `npm test` | full chain: unit + smoke + stress + e-drive | run before shipping |
 
 Quick copy-paste for the whole chain (takes ~2–4 min):
 
 ```bash
-cd /path/to/vaelen
+cd /path/to/radical
 npm install
 npm run typecheck
 npm run test:unit
@@ -67,10 +67,10 @@ npm test
 ## 4. Live manual test (needs a key)
 
 ```bash
-cd /path/to/vaelen
+cd /path/to/radical
 node src/index.ts -p "explain src/agent.ts in 3 bullets"
 node src/index.ts                       # REPL: try /help /usage /map /validate /toon /chats /budget
-VaelenGUI.exe --workspace /path/to/vaelen
+RadicalHarness.exe --workspace /path/to/radical
 ```
 
 In the window: send a message, press `+` (should say "Already on a new chat…"

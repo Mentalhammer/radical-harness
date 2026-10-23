@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { appendFile, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { isAbsolute, join } from 'node:path';
 import {
   contextWindowFor,
   defaultContextBudget,
@@ -53,7 +53,7 @@ test('context budget follows the model window unless pinned', async () => {
   const saved = scrub.map((key) => [key, process.env[key]]);
   for (const key of scrub) delete process.env[key];
 
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-config-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-config-'));
   const previousConfig = process.env.VAELEN_CONFIG;
   process.env.VAELEN_CONFIG = join(dir, 'config.json');
   try {
@@ -191,6 +191,17 @@ test('read-only detection is conservative', () => {
   assert.equal(isReadOnlyCommand('git config user.name x'), false);
   assert.equal(isReadOnlyCommand('git config --get user.name'), true);
   assert.equal(isReadOnlyCommand('git diff --output=patch.diff'), false);
+  // Navigation is how the model inspects another checkout, and the bash tool
+  // spawns a fresh shell per call, so `cd` cannot outlive its own command line.
+  // Counting it as a write used to run the project's typecheck on every prompt.
+  assert.equal(isReadOnlyCommand('cd src && grep -rn foo .'), true);
+  assert.equal(isReadOnlyCommand('cd /e/radicalharness && git log --oneline -5'), true);
+  assert.equal(isReadOnlyCommand('pushd src && ls'), true);
+  assert.equal(isReadOnlyCommand('popd'), true);
+  // Navigation must not launder a write that follows it.
+  assert.equal(isReadOnlyCommand('cd src && touch new.txt'), false);
+  assert.equal(isReadOnlyCommand('cd / && rm -rf build'), false);
+  assert.equal(isReadOnlyCommand('cd src && node build.js'), false);
 });
 
 test('system operations are classified, ordinary project work is not', () => {
@@ -286,14 +297,26 @@ test('read-only mode refuses writes and mutating commands without prompting', as
   await assert.rejects(() => unattended.approveCommand('npm test'), /Read-only mode/);
 });
 
-test('paths outside the workspace are refused', () => {
+test('writes to system locations and read-only mode are still refused', async () => {
   const permissions = new Permissions({ workspace: process.cwd() });
-  assert.throws(() => permissions.resolvePath('../escape.txt', 'read'), /escapes the workspace/);
+  const systemTarget = process.platform === 'win32' ? 'C:\\Windows\\radical-test.txt' : '/etc/radical-test.txt';
+  await assert.rejects(() => permissions.approveWrite(systemTarget), /system location/);
+  const readOnly = new Permissions({ workspace: process.cwd(), readOnly: true });
+  await assert.rejects(() => readOnly.approveWrite('src/agent.ts'), /Read-only mode/);
+});
+
+test('the workspace is a default root, not a fence', () => {
+  const permissions = new Permissions({ workspace: process.cwd() });
+  const escaped = permissions.resolvePath('../escape.txt', 'read');
+  assert.ok(isAbsolute(escaped), 'a relative path may leave the workspace');
+  assert.match(escaped, /escape\.txt$/);
+  const absolute = permissions.resolvePath(join(tmpdir(), 'elsewhere', 'file.txt'), 'read');
+  assert.ok(isAbsolute(absolute), 'an absolute path outside is honoured as given');
   assert.ok(permissions.resolvePath('src/agent.ts', 'read').length > 0);
 });
 
 test('edit_file tolerates whitespace drift without rewriting untouched lines', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-edit-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-edit-'));
   try {
     const target = join(dir, 'sample.ts');
     await writeFile(target, 'keep = 1;   \nif (x) {   \n  y();   \n}   \n', 'utf8');
@@ -313,9 +336,9 @@ test('edit_file tolerates whitespace drift without rewriting untouched lines', a
   }
 });
 
-test('a symlink cannot smuggle reads outside the workspace', async () => {
-  const outside = await mkdtemp(join(tmpdir(), 'vaelen-outside-'));
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-link-'));
+test('a symlink resolves to the real file it points at', async () => {
+  const outside = await mkdtemp(join(tmpdir(), 'radical-outside-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-link-'));
   try {
     await writeFile(join(outside, 'secret.txt'), 'secret', 'utf8');
     try {
@@ -325,11 +348,13 @@ test('a symlink cannot smuggle reads outside the workspace', async () => {
       return;
     }
     const permissions = new Permissions({ workspace: dir });
-    assert.throws(
-      () => permissions.resolvePath('link/secret.txt', 'read'),
-      /escapes the workspace/,
-      'a symlinked path outside the workspace must be refused',
+    const resolved = permissions.resolvePath('link/secret.txt', 'read');
+    assert.equal(
+      resolved.toLowerCase(),
+      join(outside, 'secret.txt').toLowerCase(),
+      'a link is followed to the file it really is, not the path as written',
     );
+    assert.equal(await readFile(resolved, 'utf8'), 'secret');
     assert.ok(
       permissions.resolvePath('new-file.txt', 'write').length > 0,
       'a not-yet-created file inside the workspace should still resolve',
@@ -341,7 +366,7 @@ test('a symlink cannot smuggle reads outside the workspace', async () => {
 });
 
 test('grep skips files above its size cap', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-grep-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-grep-'));
   try {
     await writeFile(join(dir, 'small.txt'), 'needle here\n', 'utf8');
     await writeFile(join(dir, 'huge.log'), `needle\n${'x'.repeat(2_100_000)}`, 'utf8');
@@ -378,7 +403,7 @@ test('oversized edit and glob inputs are refused before touching disk', async ()
 });
 
 test('a /clear marker stops a resumed session from replaying old turns', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-session-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-session-'));
   try {
     const path = join(dir, 'session.jsonl');
     await writeFile(
@@ -399,7 +424,7 @@ test('a /clear marker stops a resumed session from replaying old turns', async (
 });
 
 test('credentials are scrubbed from anything the model or a log can see', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-secrets-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-secrets-'));
   const previous = process.env.VAELEN_CONFIG;
   const savedEnv = ['VAELEN_API_KEY', 'DEEPSEEK_API_KEY', 'OPENAI_API_KEY'].map((key) => [key, process.env[key]]);
   for (const [key] of savedEnv) delete process.env[key];
@@ -565,7 +590,7 @@ test('the step limit defaults to 100 and 0 means no limit', () => {
 });
 
 test('a retracted prompt is not replayed when the session is resumed', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-session-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-session-'));
   try {
     const path = join(dir, 'session.jsonl');
     const session = Session.open(path);
@@ -585,7 +610,7 @@ test('a retracted prompt is not replayed when the session is resumed', async () 
 });
 
 test('the usage ledger accumulates across sessions and survives corruption', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-usage-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-usage-'));
   const ledger = join(dir, 'usage.jsonl');
   try {
     assert.equal(loadUsage(ledger).totalTokens, 0, 'a missing ledger reads as zero');
@@ -670,7 +695,7 @@ test('TOON round-trips nested, keyed, and non-uniform data', () => {
 });
 
 test('read_file returns large JSON as TOON, with text as the escape hatch', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-json-read-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-json-read-'));
   try {
     const rooms = Array.from({ length: 200 }, (_, index) => ({
       id: index + 1,
@@ -759,7 +784,7 @@ test('TOON savings are measured against pretty JSON', () => {
 });
 
 test('the toon tool converts files and inline data', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-toon-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-toon-'));
   try {
     const data = { forecast: [{ day: 'Mon', temp: 4 }, { day: 'Tue', temp: 7 }] };
     await writeFile(join(dir, 'forecast.json'), JSON.stringify(data, null, 2), 'utf8');
@@ -786,7 +811,15 @@ test('the toon tool converts files and inline data', async () => {
     await assert.rejects(() => toonTool.run({ path: 'missing.json' }, ctx), /File not found/);
     await assert.rejects(() => toonTool.run({ path: 'forecast.json', direction: 'sideways' }, ctx), /direction/);
     await assert.rejects(() => toonTool.run({ json: '{}', direction: 'decode' }, ctx), /use "toon"/);
-    await assert.rejects(() => toonTool.run({ path: '../outside.json' }, ctx), /escapes the workspace/);
+    // Outside the workspace is no longer refused: the path is read as given.
+    const outsideJson = join(dir, '..', 'radical-outside-' + Date.now() + '.json');
+    await writeFile(outsideJson, JSON.stringify({ a: 1 }, null, 2), 'utf8');
+    try {
+      const outside = await toonTool.run({ path: outsideJson }, ctx);
+      assert.match(outside.content, /a: 1|a\[1\]/, 'a file outside the workspace is read normally');
+    } finally {
+      await rm(outsideJson, { force: true });
+    }
   } finally {
     await rm(dir, { recursive: true, force: true });
   }
@@ -794,9 +827,9 @@ test('the toon tool converts files and inline data', async () => {
 
 test('usage paths can be redirected and are described for humans', () => {
   const previous = process.env.VAELEN_USAGE_FILE;
-  process.env.VAELEN_USAGE_FILE = join(tmpdir(), 'vaelen-custom-usage.jsonl');
+  process.env.VAELEN_USAGE_FILE = join(tmpdir(), 'radical-custom-usage.jsonl');
   try {
-    assert.equal(usageFilePath(), join(tmpdir(), 'vaelen-custom-usage.jsonl'));
+    assert.equal(usageFilePath(), join(tmpdir(), 'radical-custom-usage.jsonl'));
   } finally {
     if (previous === undefined) delete process.env.VAELEN_USAGE_FILE;
     else process.env.VAELEN_USAGE_FILE = previous;
@@ -824,7 +857,7 @@ function schemaContext(dir) {
 }
 
 async function withSchemaWorkspace(files, fn) {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-schema-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-schema-'));
   try {
     for (const [name, content] of Object.entries(files)) {
       const target = join(dir, name);
@@ -1027,7 +1060,7 @@ test('$ref siblings are applied alongside the referenced schema', async () => {
 });
 
 test('edit_file leaves untouched mixed line endings alone', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-mixed-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-mixed-'));
   try {
     const target = join(dir, 'mixed.txt');
     await writeFile(target, 'a\r\nb\nc\r\n', 'utf8');
@@ -1063,7 +1096,7 @@ test('repairToolCalls does not duplicate a result that already exists', () => {
 });
 
 test('a session that cannot be written does not crash the process', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-session-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-session-'));
   try {
     // Opening a directory for append fails asynchronously; before the error
     // handler existed this killed the process on the first append.
@@ -1077,7 +1110,7 @@ test('a session that cannot be written does not crash the process', async () => 
 });
 
 test('the bash tool does not hand the provider key to the shell', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-env-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-env-'));
   const secret = 'sk-test-secret-value';
   process.env.DEEPSEEK_API_KEY = secret;
   try {
@@ -1094,7 +1127,7 @@ test('the bash tool does not hand the provider key to the shell', async () => {
 });
 
 test('ask_user waits for an answer and reports a missing channel', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-ask-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-ask-'));
   try {
     const permissions = new Permissions({ workspace: dir });
     const requests = [];
@@ -1148,7 +1181,7 @@ test('working-time ledger accumulates and formats durations', async () => {
   assert.equal(formatDuration(45_000), '45s');
   assert.equal(formatDuration(185_000), '3m 05s');
   assert.equal(formatDuration(3_700_000), '1h 1m');
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-time-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-time-'));
   const ledger = join(dir, 'time.jsonl');
   try {
     assert.equal(loadTime(ledger).totalMs, 0);
@@ -1198,7 +1231,7 @@ test('unified diff preview shows changed lines', async () => {
 });
 
 test('config loads fallback model, token budget, and review mode', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-config2-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-config2-'));
   const prev = process.env.VAELEN_CONFIG;
   process.env.VAELEN_CONFIG = join(dir, 'config.json');
   const fb = process.env.VAELEN_FALLBACK_MODEL;
@@ -1232,7 +1265,7 @@ test('compaction keeps a summary of dropped turns', async () => {
 
 test('provider packs reasoning events and audit export writes jsonl', async () => {
   const { writeAuditExport } = await import('../src/pro.ts');
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-export-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-export-'));
   try {
     const p = writeAuditExport(dir, [{ event: 'tool', tool: 'bash' }]);
     const raw = await readFile(p, 'utf8');
@@ -1241,7 +1274,7 @@ test('provider packs reasoning events and audit export writes jsonl', async () =
 });
 
 test('free tier uses OpenCode proxy when no DeepSeek key exists', async () => {
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-free-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-free-'));
   const prev = process.env.VAELEN_CONFIG;
   const dk = process.env.VAELEN_API_KEY;
   const dd = process.env.DEEPSEEK_API_KEY;
@@ -1322,7 +1355,7 @@ test('a dropped stream is reported as truncated, an empty one as an error', asyn
 test('a model stuck on the same tool call is refused, then stopped', async () => {
   const { createServer } = await import('node:http');
   const { runAgent } = await import('../src/agent.ts');
-  const dir = await mkdtemp(join(tmpdir(), 'vaelen-repeat-'));
+  const dir = await mkdtemp(join(tmpdir(), 'radical-repeat-'));
 
   // Every request answers with the identical read-only tool call.
   const server = createServer((req, res) => {
@@ -1377,6 +1410,556 @@ test('a model stuck on the same tool call is refused, then stopped', async () =>
     assert.equal(messages.filter((message) => message.role === 'tool').at(-1).isError, true);
   } finally {
     await new Promise((resolve) => server.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('project checks run once at the end of a turn, not after every edit batch', async () => {
+  const { createServer } = await import('node:http');
+  const { runAgent } = await import('../src/agent.ts');
+  const dir = await mkdtemp(join(tmpdir(), 'radical-verify-once-'));
+
+  // Two edit batches, then a final answer: the old code checked after each batch.
+  const batches = ['touch a.txt', 'touch b.txt'];
+  let step = 0;
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    req.resume();
+    req.on('end', () => {
+      const command = batches[step++];
+      if (command !== undefined) {
+        const call = {
+          index: 0,
+          id: `call_${step}`,
+          type: 'function',
+          function: { name: 'bash', arguments: JSON.stringify({ command }) },
+        };
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: [call] } }] })}\n\n`);
+        res.write('data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}\n\n');
+      } else {
+        res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'done' } }] })}\n\n`);
+        res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+      }
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+
+  const ui = {
+    text() {},
+    endText() {},
+    toolStart() {},
+    toolEnd() {},
+    toolOutput() {},
+    info() {},
+    warn() {},
+    error() {},
+  };
+
+  try {
+    const config = {
+      ...loadConfig({ workspace: dir, baseUrl, model: 'test-model' }),
+      baseUrl,
+      verify: true,
+      // Appends one character per run, so the file counts the runs for us.
+      verifyCommands: ['printf x >> verify-count.txt'],
+      audit: false,
+    };
+    const reason = await runAgent({
+      config,
+      permissions: new Permissions({ workspace: dir, yolo: true, autoApprove: true }),
+      messages: [system('sys'), user('two edits then finish')],
+      ui,
+      signal: new AbortController().signal,
+    });
+
+    assert.equal(reason, 'complete');
+    const counter = await readFile(join(dir, 'verify-count.txt'), 'utf8');
+    assert.equal(counter, 'x', 'the checks ran once for the turn, not once per batch');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('a failing check keeps the tree flagged so the turn cannot end silently', async () => {
+  const { createServer } = await import('node:http');
+  const { runAgent } = await import('../src/agent.ts');
+  const dir = await mkdtemp(join(tmpdir(), 'radical-verify-red-'));
+
+  // Every reply is a final answer: after each one the failing check is reported
+  // back, the model answers again without editing, and the strikes accumulate.
+  const server = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/event-stream' });
+    req.resume();
+    req.on('end', () => {
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: 'done' } }] })}\n\n`);
+      res.write('data: {"choices":[{"delta":{},"finish_reason":"stop"}]}\n\n');
+      res.end('data: [DONE]\n\n');
+    });
+  });
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const baseUrl = `http://127.0.0.1:${server.address().port}/v1`;
+
+  const ui = {
+    text() {},
+    endText() {},
+    toolStart() {},
+    toolEnd() {},
+    toolOutput() {},
+    info() {},
+    warn() {},
+    error() {},
+  };
+
+  try {
+    const config = {
+      ...loadConfig({ workspace: dir, baseUrl, model: 'test-model' }),
+      baseUrl,
+      verify: true,
+      verifyCommands: ['printf x >> verify-count.txt; exit 1'],
+      audit: false,
+    };
+    const messages = [system('sys'), user('change something')];
+    // Pretend the turn already edited files: this is what triggers the checks.
+    const state = {
+      audit: { record() {} },
+      checkpoints: { begin() {}, finish() {} },
+      hooks: {},
+      mutated: true,
+      subagents: 0,
+      verifyRuns: 0,
+    };
+    const reason = await runAgent({
+      config,
+      permissions: new Permissions({ workspace: dir, yolo: true, autoApprove: true }),
+      messages,
+      ui,
+      signal: new AbortController().signal,
+      state,
+    });
+
+    assert.equal(reason, 'verify-failed', 'a red tree ends the turn after three strikes');
+    const counter = await readFile(join(dir, 'verify-count.txt'), 'utf8');
+    assert.equal(counter, 'xxx', 'a final answer without edits is still re-checked');
+    const notes = messages.filter((message) => message.role === 'user' && /verification failed/.test(message.content));
+    assert.equal(notes.length, 3, 'each failure is fed back to the model');
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('TOON round-trips keys and values made of structure characters', () => {
+  // A fuzz pass found these: an empty-string key used to be dropped as if it
+  // were an anonymous array, a lone "-" decoded as a list marker, and a quoted
+  // value containing ":" decoded as a key/value field.
+  const cases = [
+    { '': [1, 2] },
+    { a: { '': [85283.5] } },
+    '-',
+    '- dash',
+    { 'a[b]': [1, 2] },
+    { 'k:v': [1] },
+    { 'k,v': [1] },
+    { '{k}': [1] },
+    { 'quote"key': [{ nested: [{ 'a[b]': 1 }] }] },
+    ['-', '[3]:', 'a,b', 'k: v', ' leading', 'trailing ', '"', '{"json":"looking"}'],
+    [{ '': [null, 'x'] }, '-bb', 'plain'],
+  ];
+  for (const value of cases) {
+    const encoded = encodeToon(value);
+    assert.deepEqual(decodeToon(encoded), value, `round trip changed ${JSON.stringify(value)} via ${JSON.stringify(encoded)}`);
+  }
+  assert.deepEqual(decodeToon(encodeToon('k: v')), 'k: v', 'a quoted scalar must not decode as a field');
+  assert.match(encodeToon('-'), /^"-"$/, 'a lone dash must be quoted so it is not a list marker');
+  assert.match(encodeToon({ '': [1] }), /^""\[1\]:/, 'an empty key must stay visible in the header');
+});
+
+test('compaction reserves the summary it adds, so trimming cannot overshoot', () => {
+  const messages = [system('sys')];
+  for (let index = 0; index < 40; index++) {
+    messages.push(user(`turn ${index} ${'y'.repeat(200)}`));
+    const id = `call_${index}`;
+    messages.push({
+      role: 'assistant',
+      content: '',
+      toolCalls: [{ id, name: 'read_file', args: { path: `/a/very/long/path/component-${index}/file-${index}.ts` } }],
+    });
+    messages.push(tool(id, 'read_file', 'z'.repeat(3000)));
+  }
+  messages.push(user('the question being answered'), assistant('the answer'));
+
+  const budget = 1200;
+  compact(messages, budget);
+
+  assert.equal(repairToolCalls(messages), 0, 'trimming must not strand a tool call');
+  assert.ok(
+    estimateTokens(messages) <= budget,
+    `trimming left ${estimateTokens(messages)} tokens for a budget of ${budget}`,
+  );
+  // The note carries a capped goal and file list, so its reserve is honest.
+  assert.ok(messages[0].content.length < 1200, `the summary grew to ${messages[0].content.length} chars`);
+  assert.match(messages[0].content, /Earlier conversation trimmed/);
+});
+
+// ---------------------------------------------------------------------------
+// Stats and status: the numbers the UI shows must be exactly right, not merely
+// non-zero. Each block pins one counter to its arithmetic.
+// ---------------------------------------------------------------------------
+
+test('usage ledger adds requests, prompt, completion, models, and sessions exactly', async () => {
+  const { readUsageFile, topModels } = await import('../src/usage.ts');
+  const dir = await mkdtemp(join(tmpdir(), 'radical-usage-math-'));
+  const path = join(dir, 'usage.jsonl');
+  try {
+    await recordUsage({ model: 'model-a', promptTokens: 100, completionTokens: 20, session: 's1' }, path);
+    await recordUsage({ model: 'model-a', promptTokens: 50, completionTokens: 10, session: 's1' }, path);
+    await recordUsage({ model: 'model-b', promptTokens: 7, completionTokens: 3, session: 's2' }, path);
+
+    const totals = loadUsage(path);
+    assert.equal(totals.totalTokens, 120 + 60 + 10, 'totals add prompt+completion of every request');
+    assert.equal(totals.promptTokens, 157, 'prompt tokens accumulate separately');
+    assert.equal(totals.completionTokens, 33, 'completion tokens accumulate separately');
+    assert.equal(totals.requests, 3, 'one record is one request');
+    assert.equal(totals.sessions, 2, 'the session count is distinct ids, not requests');
+    assert.deepEqual(totals.byModel, { 'model-a': 180, 'model-b': 10 }, 'per-model totals split by model');
+    assert.equal(totals.estimatedRequests, 0, 'a reported usage is not estimated');
+    assert.ok(totals.firstAt && totals.lastAt, 'both timestamps are recorded');
+    assert.ok(totals.firstAt <= totals.lastAt, 'firstAt never lands after lastAt');
+
+    const state = readUsageFile(path);
+    assert.equal(state.sessions.size, 2, 'the journal exposes its session ids');
+
+    assert.match(describeUsage(totals), /190 tokens/, 'describeUsage leads with the token total');
+    assert.match(describeUsage(totals), /3 requests/, 'describeUsage pluralises requests');
+    assert.match(describeUsage(totals), /2 sessions/, 'describeUsage counts sessions');
+    assert.match(topModels(totals), /model-a: 180/, 'the busiest model comes first');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('usage ledger falls back to prompt+completion when the provider sends no total', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'radical-usage-fallback-'));
+  const path = join(dir, 'usage.jsonl');
+  try {
+    // A hand-written line with no "total" field, exactly like an older journal.
+    await writeFile(
+      path,
+      `{"v":1,"at":"2026-01-01T00:00:00.000Z","model":"old","prompt":40,"completion":2,"requests":1}\n`,
+      'utf8',
+    );
+    assert.equal(loadUsage(path).totalTokens, 42, 'a missing total is the sum of its parts');
+
+    // ... and a line carrying a total must be trusted over the parts.
+    await writeFile(
+      path,
+      `{"v":1,"at":"2026-01-01T00:00:00.000Z","model":"odd","prompt":5,"completion":5,"total":7,"requests":1}\n`,
+      'utf8',
+    );
+    assert.equal(loadUsage(path).totalTokens, 7, 'an explicit total wins, even when it disagrees');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('usage ledger marks estimated requests without inflating counts', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'radical-usage-estimated-'));
+  const path = join(dir, 'usage.jsonl');
+  try {
+    await recordUsage({ model: 'm', promptTokens: 10, completionTokens: 5, estimated: true, session: 's1' }, path);
+    await recordUsage({ model: 'm', promptTokens: 10, completionTokens: 5, session: 's1' }, path);
+    // One record can stand for several requests (a retried batch).
+    await recordUsage({ model: 'm', promptTokens: 30, completionTokens: 15, requests: 3, estimated: true }, path);
+
+    const totals = loadUsage(path);
+    assert.equal(totals.requests, 5, 'requests counts the record multiplicity');
+    assert.equal(totals.estimatedRequests, 4, 'only the estimated records are counted as estimated');
+    assert.equal(totals.totalTokens, 15 + 15 + 45, 'estimated usage still counts toward the total');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('usage ledger skips corrupt lines and folds into a checkpoint without losing totals', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'radical-usage-fold-'));
+  const path = join(dir, 'usage.jsonl');
+  try {
+    const line = `{"v":1,"at":"2026-01-01T00:00:00.000Z","model":"bulk","prompt":1,"completion":0,"total":1,"requests":1,"session":"bulk"}\n`;
+    // Past the 128 KB fold threshold, so the next record rewrites a checkpoint.
+    await writeFile(path, line.repeat(4000), 'utf8');
+    assert.equal(loadUsage(path).totalTokens, 4000, 'the bulk journal reads back exactly');
+
+    const after = await recordUsage({ model: 'one', promptTokens: 5, completionTokens: 5, session: 's1' }, path);
+    assert.equal(after.totalTokens, 4010, 'folding keeps every earlier token');
+    assert.equal(after.requests, 4001, 'folding keeps the request count');
+    assert.equal(after.sessions, 2, 'folding keeps both session ids');
+
+    const raw = await readFile(path, 'utf8');
+    assert.match(raw, /"checkpoint"/, 'the journal folds once it grows past the threshold');
+    assert.equal(loadUsage(path).totalTokens, 4010, 'the folded file reads back the same total');
+
+    // A corrupt line is skipped, not fatal, and not counted.
+    await appendFile(path, '{ this is not json\n');
+    assert.equal(loadUsage(path).totalTokens, 4010, 'a torn line never changes the totals');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('time ledger counts turns and sessions and ignores empty turns', async () => {
+  const { describeTime, emptyTime, formatDuration, loadTime, recordTime } = await import('../src/time.ts');
+  const dir = await mkdtemp(join(tmpdir(), 'radical-time-math-'));
+  const path = join(dir, 'time.jsonl');
+  try {
+    assert.deepEqual(emptyTime(), { totalMs: 0, turns: 0, sessions: 0, firstAt: null, lastAt: null });
+
+    await recordTime(1500, 's1', path);
+    await recordTime(2500, 's1', path);
+    await recordTime(1000, 's2', path);
+    // Zero and negative durations are not turns at all.
+    await recordTime(0, 's2', path);
+    await recordTime(-500, 's2', path);
+    await recordTime(Number.NaN, 's2', path);
+
+    const totals = loadTime(path);
+    assert.equal(totals.totalMs, 5000, 'working time accumulates across turns');
+    assert.equal(totals.turns, 3, 'a zero-length turn must not be counted');
+    assert.equal(totals.sessions, 2, 'sessions are distinct ids');
+
+    assert.equal(formatDuration(totals.totalMs), '5s');
+    assert.equal(describeTime(totals), '5s \u00b7 3 turns \u00b7 2 sessions');
+
+    const single = { ...emptyTime(), totalMs: 61_000, turns: 1, sessions: 1 };
+    assert.equal(describeTime(single), '1m 01s \u00b7 1 turn \u00b7 1 session', 'singular nouns are used for one');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('time ledger folds into a checkpoint without losing time', async () => {
+  const { loadTime, recordTime } = await import('../src/time.ts');
+  const dir = await mkdtemp(join(tmpdir(), 'radical-time-fold-'));
+  const path = join(dir, 'time.jsonl');
+  try {
+    const line = `{"v":1,"at":"2026-01-01T00:00:00.000Z","ms":1000,"turns":1,"session":"bulk"}\n`;
+    await writeFile(path, line.repeat(2000), 'utf8');
+    assert.equal(loadTime(path).totalMs, 2_000_000, 'the bulk journal reads back exactly');
+    assert.equal(loadTime(path).turns, 2000);
+
+    const after = await recordTime(500, 'later', path);
+    assert.equal(after.totalMs, 2_000_500, 'folding keeps every earlier millisecond');
+    assert.equal(after.turns, 2001, 'folding keeps the turn count');
+    assert.equal(after.sessions, 2, 'folding keeps both session ids');
+
+    const raw = await readFile(path, 'utf8');
+    assert.match(raw, /"checkpoint"/, 'the time journal folds past its threshold');
+    assert.equal(loadTime(path).totalMs, 2_000_500, 'the folded file reads back the same total');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('formatDuration is exact at every boundary', async () => {
+  const { formatDuration } = await import('../src/time.ts');
+  const cases = [
+    [0, '0s'],
+    [999, '0s'],
+    [1000, '1s'],
+    [59_999, '59s'],
+    [60_000, '1m 00s'],
+    [61_000, '1m 01s'],
+    [3_599_000, '59m 59s'],
+    [3_600_000, '1h 0m'],
+    [7_380_000, '2h 3m'],
+    [Number.NaN, '0s'],
+    [-5, '0s'],
+  ];
+  for (const [ms, expected] of cases) {
+    assert.equal(formatDuration(ms), expected, ms + 'ms should format as ' + expected);
+  }
+});
+
+test('estimateTokens counts message overhead, images, and tool arguments', async () => {
+  assert.equal(estimateTokens([]), 0, 'an empty transcript has no size');
+  // 400 chars -> 100 tokens, plus 4 tokens of per-message overhead.
+  assert.equal(estimateTokens([system('x'.repeat(400))]), 104);
+  assert.equal(estimateTokens([system('x'.repeat(400)), user('y'.repeat(400))]), 100 + 4 + 100 + 4);
+
+  // A text attachment is charged by its characters; an image is a flat 1200.
+  const withText = [user('hi', [{ id: 'a', name: 'a.txt', kind: 'text', content: 'z'.repeat(400) }])];
+  assert.equal(estimateTokens(withText), 1 + 4 + 100);
+  const withImage = [user('hi', [{ id: 'b', name: 'b.png', kind: 'image', mime: 'image/png' }])];
+  assert.equal(estimateTokens(withImage), 1 + 4 + 1200);
+
+  // Tool arguments are part of the request, so they count too.
+  const withCall = [assistant('', [{ id: 'c', name: 'read_file', args: { path: 'x' } }])];
+  assert.equal(estimateTokens(withCall), Math.ceil((JSON.stringify({ path: 'x' }).length + 'read_file'.length) / 4) + 4);
+
+  // isOverBudget is strictly greater-than, so a transcript exactly at the
+  // budget still gets sent.
+  const exact = [system('x'.repeat(384))];
+  const size = estimateTokens(exact);
+  assert.equal(size, 100);
+  const { isOverBudget } = await import('../src/context.ts');
+  assert.equal(isOverBudget(exact, size), false, 'exactly at budget is not over');
+  assert.equal(isOverBudget(exact, size - 1), true, 'one token over is over');
+});
+
+test('step limits: default, ceiling, unlimited, and the loop bound they feed', () => {
+  assert.equal(DEFAULT_MAX_STEPS, 100, 'the documented default is 100 steps');
+  assert.equal(normalizeMaxSteps(undefined), DEFAULT_MAX_STEPS);
+  assert.equal(normalizeMaxSteps(Number.NaN), DEFAULT_MAX_STEPS, 'a junk value falls back to the default');
+  assert.equal(normalizeMaxSteps(0), 0, 'zero means no cap');
+  assert.equal(normalizeMaxSteps(-3), 0, 'a negative cap means no cap');
+  assert.equal(normalizeMaxSteps(25.9), 25, 'a fractional limit is floored');
+  assert.equal(normalizeMaxSteps(9e9), MAX_STEPS_CEILING, 'an absurd limit is clamped');
+
+  assert.equal(isUnlimitedSteps(0), true);
+  assert.equal(isUnlimitedSteps(1), false);
+
+  assert.equal(stepLimit(0), Number.POSITIVE_INFINITY, 'unlimited becomes an infinite loop bound');
+  assert.equal(stepLimit(50), 50);
+  assert.equal(stepLimit(9e9), MAX_STEPS_CEILING, 'the loop bound is clamped too');
+});
+
+test('a session records its working time durably and ignores junk', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'radical-session-time-'));
+  try {
+    const session = Session.create(dir, { model: 'm', workspace: dir });
+    session.append(user('hello'));
+    session.appendEvent({ type: 'time', ms: 1500 });
+    session.appendEvent({ type: 'time', ms: 2500 });
+    session.appendEvent({ type: 'time', ms: -10 }); // negative: ignored
+    session.appendEvent({ type: 'time', ms: 'soon' }); // wrong type: ignored
+    await session.close();
+
+    assert.equal(Session.timeMs(session.path), 4000, 'time events sum to the chat working time');
+    assert.equal(Session.load(session.path).length, 1, 'time events are not messages');
+
+    // A torn write must not wipe the total.
+    await appendFile(session.path, '{"type":"time","ms":99\n');
+    assert.equal(Session.timeMs(session.path), 4000, 'a corrupt line is skipped');
+
+    assert.equal(Session.timeMs(join(dir, 'missing.jsonl')), 0, 'a missing transcript has no time');
+
+    // Clearing the conversation resets the transcript but not the working time.
+    const cleared = Session.create(dir, { model: 'm', workspace: dir });
+    cleared.append(user('discarded'));
+    cleared.appendEvent({ type: 'time', ms: 1000 });
+    cleared.markCleared();
+    await cleared.close();
+    assert.equal(Session.load(cleared.path).length, 0, '/clear still empties the transcript');
+    assert.equal(Session.timeMs(cleared.path), 1000, 'clearing a chat keeps its recorded working time');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('the repository list covers every affiliation and is not capped', async () => {
+  const { reposListArgs, parseRepoApiList } = await import('../src/repos.ts');
+
+  const args = reposListArgs();
+  const joined = args.join(' ');
+  assert.ok(args.includes('api'), 'the REST endpoint is used, not gh repo list');
+  assert.ok(args.includes('--paginate'), 'every page must be walked');
+  assert.match(joined, /affiliation=owner,collaborator,organization_member/);
+  assert.match(joined, /per_page=100/);
+  assert.doesNotMatch(joined, /--limit/, 'a fixed limit is what silently dropped repositories');
+  assert.ok(!args.includes('repo') || args[0] === 'api', 'gh repo list must not be the primary call');
+
+  // The JSONL gh api --jq emits: one object per line, newest first after parsing.
+  const stdout = [
+    '{"nameWithOwner":"smer44/city-builder","visibility":"private","updatedAt":"2026-09-02T10:00:00Z"}',
+    '{"nameWithOwner":"Mentalhammer/vaelen-trial","visibility":"public","updatedAt":"2026-10-01T10:00:00Z"}',
+    '{"nameWithOwner":"Wolsige/Project-Darwin","visibility":"internal","updatedAt":"2026-08-01T10:00:00Z"}',
+    '',
+    'not json at all',
+    '{"nameWithOwner":"../../escape","visibility":"public","updatedAt":"2026-10-02T10:00:00Z"}',
+    '{"nameWithOwner":"Smer44/City-Builder","visibility":"private","updatedAt":"2026-09-02T10:00:00Z"}',
+  ].join('\n');
+
+  const repos = parseRepoApiList(stdout);
+  assert.deepEqual(
+    repos.map((repo) => repo.owner + '/' + repo.name),
+    ['Mentalhammer/vaelen-trial', 'smer44/city-builder', 'Wolsige/Project-Darwin'],
+    'collaborator and organisation repositories are kept, newest first',
+  );
+  assert.equal(repos[0].visibility, 'public');
+  assert.equal(repos[1].visibility, 'private');
+  assert.equal(repos[2].visibility, 'private', 'internal repositories are not shown as public');
+
+  // A repository the account does not own is the whole point of the fix.
+  assert.ok(
+    repos.some((repo) => repo.owner !== 'Mentalhammer'),
+    'repositories owned by someone else are listed',
+  );
+  assert.equal(
+    repos.filter((repo) => repo.name.toLowerCase() === 'city-builder').length,
+    1,
+    'case-insensitive duplicates from overlapping pages are dropped',
+  );
+  assert.equal(repos.length, 3, 'junk lines and escapes are skipped, not counted');
+
+  assert.deepEqual(parseRepoApiList(''), []);
+  assert.deepEqual(parseRepoApiList('\n\n'), []);
+});
+
+test('VAELEN_AUDIT_FILE redirects the audit log', async () => {
+  const { AuditLog } = await import('../src/audit.ts');
+  const dir = await mkdtemp(join(tmpdir(), 'radical-audit-env-'));
+  const saved = process.env.VAELEN_AUDIT_FILE;
+  try {
+    const target = join(dir, 'elsewhere.jsonl');
+    process.env.VAELEN_AUDIT_FILE = target;
+    const log = new AuditLog(dir, 'session');
+    assert.equal(log.path, target, 'the env override is honoured by the constructor');
+    log.record({ event: 'tool', tool: 'read_file', ok: true });
+    assert.match(await readFile(target, 'utf8'), /read_file/, 'the entry lands in the override');
+
+    delete process.env.VAELEN_AUDIT_FILE;
+    const fallback = new AuditLog(dir, 'session');
+    assert.equal(
+      fallback.path,
+      join(dir, '.vaelen', 'audit.jsonl'),
+      'without the override it stays in the workspace',
+    );
+  } finally {
+    if (saved === undefined) delete process.env.VAELEN_AUDIT_FILE;
+    else process.env.VAELEN_AUDIT_FILE = saved;
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('loadWithTime agrees with load and timeMs in one pass', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'radical-session-both-'));
+  try {
+    const session = Session.create(dir, { model: 'm', workspace: dir });
+    session.append(user('one'));
+    session.appendEvent({ type: 'time', ms: 1200 });
+    session.append(assistant('two'));
+    session.appendEvent({ type: 'time', ms: 800 });
+    await session.close();
+
+    const both = Session.loadWithTime(session.path);
+    assert.deepEqual(both.messages, Session.load(session.path), 'the same messages as load()');
+    assert.equal(both.timeMs, Session.timeMs(session.path), 'the same time as timeMs()');
+    assert.equal(both.timeMs, 2000);
+
+    assert.deepEqual(Session.loadWithTime(join(dir, 'ghost.jsonl')), { messages: [], timeMs: 0 });
+
+    // A clear still resets the transcript while the time keeps accumulating.
+    const cleared = Session.create(dir, { model: 'm', workspace: dir });
+    cleared.append(user('discarded'));
+    cleared.appendEvent({ type: 'time', ms: 500 });
+    cleared.markCleared();
+    await cleared.close();
+    const after = Session.loadWithTime(cleared.path);
+    assert.deepEqual(after.messages, [], 'clear still empties the transcript');
+    assert.equal(after.timeMs, 500, 'the working time survives a clear');
+  } finally {
     await rm(dir, { recursive: true, force: true });
   }
 });
