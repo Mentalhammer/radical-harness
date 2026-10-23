@@ -6,9 +6,8 @@ node_modules/
 !.env.example
 *.log
 dist/
-VaelenGUI.exe
+RadicalHarness.exe
 RadicalHarness.exe.old-*
-VaelenGUI.exe.old-*
 
 # local playground file used to try the agent out
 hello-world.txt
