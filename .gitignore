@@ -1,6 +1,9 @@
 node_modules/
 .vaelen/
+# Local environment files: never publish real values, keep a shareable example.
 .env
+.env.*
+!.env.example
 *.log
 dist/
 RadicalHarness.exe
