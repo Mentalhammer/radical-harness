@@ -13,6 +13,10 @@ import type { Message } from './types.ts';
  *                 a system prompt is never indexed, so role:system finds nothing)
  *   chat:build    only chats whose title contains "build"
  *   project:app   only chats whose folder contains "app"
+ *
+ * If nothing matches literally, the query is retried once with one-edit
+ * tolerance (a missing/extra letter, a substitution, or two swapped letters)
+ * so a typo still finds the chat. Those hits are marked as near matches.
  */
 export interface SearchQuery {
   terms: string[];
@@ -31,10 +35,12 @@ export interface SearchHit {
   tool?: string;
   /** Text around the first match, with the matched terms emphasised by the UI. */
   snippet: string;
-  /** How many of the query's terms this message matched (higher is better). */
+  /** Weighted term coverage: exact terms count 1, near matches count 0.5. */
   score: number;
   /** Total occurrences in this message. */
   count: number;
+  /** Words the typo-tolerant fallback actually matched, so the UI can mark them. */
+  near?: string[];
 }
 
 export interface Searchable {
@@ -52,6 +58,13 @@ export interface SearchResult extends SearchHit {
 
 const SNIPPET_BEFORE = 60;
 const SNIPPET_AFTER = 160;
+/** Typos are only worth guessing at for word-like terms this long. */
+const FUZZY_MIN_LENGTH = 5;
+/** A near match ranks below an exact one, and only runs when nothing matched. */
+const FUZZY_WEIGHT = 0.5;
+/** Bound the fallback scan so a huge tool dump cannot stall a keystroke. */
+const MAX_FUZZY_CHARS = 50_000;
+const MAX_FUZZY_WORDS = 4_000;
 // `system` is accepted so `role:system` filters everything out, which is the
 // honest answer: the prompt is never indexed.
 const ROLES = new Set(['user', 'assistant', 'tool', 'system']);
@@ -129,20 +142,54 @@ function count(haystack: string, needle: string): number {
   return total;
 }
 
-function snippetAround(text: string, needles: string[]): string {
-  const lower = text.toLowerCase();
-  let at = -1;
-  for (const needle of needles) {
-    const found = lower.indexOf(needle);
-    if (found >= 0 && (at === -1 || found < at)) at = found;
-  }
-  if (at === -1) return text.slice(0, SNIPPET_BEFORE + SNIPPET_AFTER).trim();
-
+function snippetAround(text: string, at: number): string {
+  if (at < 0) return text.slice(0, SNIPPET_BEFORE + SNIPPET_AFTER).trim();
   const start = Math.max(0, at - SNIPPET_BEFORE);
   const end = Math.min(text.length, at + SNIPPET_AFTER);
   // Collapse newlines so a hit inside a tool dump stays on one readable line.
   const body = text.slice(start, end).replace(/\s+/g, ' ').trim();
   return `${start > 0 ? '…' : ''}${body}${end < text.length ? '…' : ''}`;
+}
+
+/** Word-like terms only: `src/x.ts` and `--flag` keep their literal meaning. */
+function termIsFuzzyEligible(term: string): boolean {
+  return term.length >= FUZZY_MIN_LENGTH && /^[\p{L}\p{N}_]+$/u.test(term);
+}
+
+/**
+ * True when `a` and `b` differ by one insertion, deletion, substitution, or
+ * adjacent transposition ("recieve" → "receive"). One edit catches the typos
+ * people actually make without turning short common words into matches.
+ */
+function withinOneEdit(a: string, b: string): boolean {
+  if (a === b) return true;
+  const la = a.length;
+  const lb = b.length;
+  if (Math.abs(la - lb) > 1) return false;
+  let i = 0;
+  while (i < la && i < lb && a[i] === b[i]) i += 1;
+  if (la === lb) {
+    if (a.slice(i + 1) === b.slice(i + 1)) return true;
+    return a[i] === b[i + 1] && a[i + 1] === b[i] && a.slice(i + 2) === b.slice(i + 2);
+  }
+  // One insertion/deletion: skip the extra character in the longer string.
+  return la > lb ? a.slice(i + 1) === b.slice(i) : a.slice(i) === b.slice(i + 1);
+}
+
+interface Word {
+  text: string;
+  at: number;
+}
+
+/** Lowercased words and their offsets, capped so a giant dump stays cheap. */
+function wordsOf(text: string): Word[] {
+  const scope = text.length > MAX_FUZZY_CHARS ? text.slice(0, MAX_FUZZY_CHARS) : text;
+  const words: Word[] = [];
+  for (const match of scope.matchAll(/[\p{L}\p{N}_]+/gu)) {
+    words.push({ text: match[0].toLowerCase(), at: match.index ?? 0 });
+    if (words.length >= MAX_FUZZY_WORDS) break;
+  }
+  return words;
 }
 
 /** True when the chat itself is filtered out by `chat:`/`project:` terms. */
@@ -154,11 +201,20 @@ function chatMatches(query: SearchQuery, chat: Searchable): boolean {
   return true;
 }
 
-/** Matches one transcript. Returns hits in transcript order. */
-export function searchMessages(query: SearchQuery, chat: Searchable): SearchHit[] {
+/**
+ * Matches one transcript. Returns hits in transcript order. `tolerant` retries
+ * a term that has no literal occurrence as a one-edit near match; the caller
+ * (searchChats) only turns it on when the whole query matched nothing exactly.
+ */
+export function searchMessages(query: SearchQuery, chat: Searchable, tolerant = false): SearchHit[] {
   if (isEmptyQuery(query) || !chatMatches(query, chat)) return [];
 
-  const hints = [...query.terms, ...query.phrases];
+  // A quoted phrase keeps its literal meaning: guessing which words inside it
+  // were swapped would be worse than returning nothing.
+  const hints: { text: string; tolerant: boolean }[] = [
+    ...query.terms.map((text) => ({ text, tolerant: true })),
+    ...query.phrases.map((text) => ({ text, tolerant: false })),
+  ];
   const hits: SearchHit[] = [];
   let index = 0;
 
@@ -170,18 +226,40 @@ export function searchMessages(query: SearchQuery, chat: Searchable): SearchHit[
     const text = messageText(message);
     if (text === '') continue;
     const lower = text.toLowerCase();
+    let words: Word[] | null = null;
+    const nearMatch = (term: string): Word | null => {
+      if (!termIsFuzzyEligible(term)) return null;
+      words ??= wordsOf(text);
+      for (const word of words) {
+        if (Math.abs(word.text.length - term.length) > 1) continue;
+        if (withinOneEdit(word.text, term)) return word;
+      }
+      return null;
+    };
 
     let score = 0;
     let occurrences = 0;
+    let at = -1;
+    const near: string[] = [];
     let matched = true;
-    for (const term of hints) {
-      const found = count(lower, term);
-      if (found === 0) {
+    for (const hint of hints) {
+      const found = count(lower, hint.text);
+      if (found > 0) {
+        score += 1;
+        occurrences += found;
+        const first = lower.indexOf(hint.text);
+        if (first >= 0) at = at < 0 ? first : Math.min(at, first);
+        continue;
+      }
+      const fuzzy = tolerant && hint.tolerant ? nearMatch(hint.text) : null;
+      if (!fuzzy) {
         matched = false;
         break;
       }
-      score += 1;
-      occurrences += found;
+      score += FUZZY_WEIGHT;
+      occurrences += 1;
+      near.push(fuzzy.text);
+      at = at < 0 ? fuzzy.at : Math.min(at, fuzzy.at);
     }
     if (!matched) continue;
     if (query.excluded.some((term) => lower.includes(term))) continue;
@@ -190,9 +268,10 @@ export function searchMessages(query: SearchQuery, chat: Searchable): SearchHit[
       index: index - 1,
       role: message.role,
       tool: message.role === 'tool' ? message.name : undefined,
-      snippet: snippetAround(text, hints.length > 0 ? hints : []),
+      snippet: snippetAround(text, at),
       score,
       count: occurrences,
+      ...(near.length > 0 ? { near } : {}),
     });
   }
 
@@ -204,20 +283,27 @@ export function searchMessages(query: SearchQuery, chat: Searchable): SearchHit[
  * then how recent the chat is. `limit` caps the hits returned; `truncated` says
  * whether anything was left out, so the window can tell the user.
  */
-export function searchChats(
-  raw: string,
-  chats: { id: string; title: string; project: string; updatedAt: string; messages: Message[] }[],
-  limit = 50,
-): { query: SearchQuery; results: SearchResult[]; truncated: boolean; chatsScanned: number } {
-  const query = parseQuery(raw);
-  const results: SearchResult[] = [];
-  if (isEmptyQuery(query)) return { query, results, truncated: false, chatsScanned: 0 };
+interface Collected {
+  results: SearchResult[];
+  truncated: boolean;
+  chatsScanned: number;
+}
 
-  const max = Math.max(1, Math.min(200, Math.floor(limit)));
+function collect(
+  query: SearchQuery,
+  chats: { id: string; title: string; project: string; updatedAt: string; messages: Message[] }[],
+  max: number,
+  tolerant: boolean,
+): Collected {
+  const results: SearchResult[] = [];
   let truncated = false;
 
   for (const chat of chats) {
-    const hits = searchMessages(query, { messages: chat.messages, title: chat.title, project: chat.project });
+    const hits = searchMessages(
+      query,
+      { messages: chat.messages, title: chat.title, project: chat.project },
+      tolerant,
+    );
     for (const hit of hits) {
       if (results.length >= max) {
         truncated = true;
@@ -235,5 +321,26 @@ export function searchChats(
   }
 
   results.sort((a, b) => b.score - a.score || b.updatedAt.localeCompare(a.updatedAt) || a.index - b.index);
-  return { query, results, truncated, chatsScanned: chats.length };
+  return { results, truncated, chatsScanned: chats.length };
+}
+
+export function searchChats(
+  raw: string,
+  chats: { id: string; title: string; project: string; updatedAt: string; messages: Message[] }[],
+  limit = 50,
+): { query: SearchQuery; results: SearchResult[]; truncated: boolean; chatsScanned: number; fuzzy: boolean } {
+  const query = parseQuery(raw);
+  if (isEmptyQuery(query)) {
+    return { query, results: [], truncated: false, chatsScanned: 0, fuzzy: false };
+  }
+
+  const max = Math.max(1, Math.min(200, Math.floor(limit)));
+  // Literal first: a query that matches needs no guessing, and a correct search
+  // never fills up with "best ≈ test" noise. Only zero literal hits fall back.
+  const exact = collect(query, chats, max, false);
+  if (exact.results.length > 0 || !query.terms.some((term) => termIsFuzzyEligible(term))) {
+    return { query, ...exact, fuzzy: false };
+  }
+  const near = collect(query, chats, max, true);
+  return { query, ...near, fuzzy: near.results.length > 0 };
 }

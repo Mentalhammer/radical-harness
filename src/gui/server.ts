@@ -1051,6 +1051,8 @@ async function main(): Promise<void> {
       truncated: outcome.truncated,
       chatsScanned: outcome.chatsScanned,
       parsed: outcome.query,
+      // True when nothing matched literally and these results are near matches.
+      fuzzy: outcome.fuzzy,
     };
   }
 

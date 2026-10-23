@@ -574,6 +574,48 @@ test('transcript search matches words, phrases, roles, and exclusions', () => {
   assert.equal(capped.chatsScanned, 3);
 });
 
+test('search falls back to one-edit near matches when nothing matches literally', () => {
+  const messages = [
+    { role: 'user', content: 'please deploy the staging build' },
+    { role: 'assistant', content: 'Deploying now.', toolCalls: [] },
+  ];
+  const chat = {
+    id: 'a',
+    title: 'build log',
+    project: 'p',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    messages,
+  };
+
+  // A correct query matches literally and never needs the fallback.
+  const exact = searchChats('staging', [chat]);
+  assert.equal(exact.fuzzy, false, 'an exact query must not be labelled near');
+  assert.equal(exact.results.length, 1);
+  assert.equal(exact.results[0].near, undefined);
+
+  // One extra letter: "deployy" is a near match for "deploy".
+  const near = searchChats('deployy', [chat]);
+  assert.equal(near.fuzzy, true, 'the fallback should report that it ran');
+  assert.equal(near.results.length, 1, 'a typo should still find the message');
+  assert.deepEqual(near.results[0].near, ['deploy'], 'the hit names the word it matched');
+  assert.match(near.results[0].snippet, /deploy the staging build/, 'the snippet centres on the near match');
+
+  // One adjacent transposition also counts as a single edit.
+  const transposed = searchChats('stagnig', [{ ...chat, messages: [{ role: 'user', content: 'staging' }] }]);
+  assert.equal(transposed.fuzzy, true);
+  assert.equal(transposed.results.length, 1);
+
+  // Short terms are never guessed: "tst" is too short to be trusted.
+  const shortChat = { ...chat, messages: [{ role: 'user', content: 'test' }] };
+  assert.equal(searchChats('tst', [shortChat]).results.length, 0);
+
+  // Quoted phrases stay verbatim; a typo inside one does not match.
+  assert.equal(searchChats('"staging buld"', [chat]).results.length, 0);
+
+  // Exclusions stay literal, so a near match can still be excluded.
+  assert.equal(searchChats('deployy -deploy', [chat]).results.length, 0);
+});
+
 test('the step limit defaults to 100 and 0 means no limit', () => {
   assert.equal(DEFAULT_MAX_STEPS, 100);
   assert.equal(normalizeMaxSteps(undefined), 100, 'a missing value uses the default');

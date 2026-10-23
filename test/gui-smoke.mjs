@@ -204,6 +204,9 @@ async function main() {
     assert.match(pageHtml, /id="new-chat"/, 'the sidebar should offer a new chat button');
     assert.match(pageHtml, /id="prompt-bar"/, 'the chat should render the current prompt bar');
     assert.match(pageHtml, /function setPromptBar/, 'the prompt bar should follow the open chat');
+    assert.match(pageHtml, /function renderAnsi/, 'tool output should render ANSI colors');
+    assert.match(pageHtml, /function renderAssistant/, 'replies should highlight fenced code');
+    assert.match(pageHtml, /tok-str/, 'syntax-highlight token styles should be served');
     assert.match(pageHtml, /liveWorkingMs/, 'lifetime time should sum every running chat');
     assert.match(pageHtml, /reconcileLiveTurns/, 'the rail should resync which turns are live');
     assert.match(pageHtml, /id="chat-recover"/, 'the sidebar should offer a recover button');
@@ -1062,6 +1065,16 @@ async function main() {
     );
     const byTitle = await (await client.get('/api/search?q=' + encodeURIComponent('attachment chat:attachment-test'))).json();
     assert.ok(byTitle.results.length > 0, 'chat: filters by chat title');
+
+    // A one-letter typo falls back to near matches, and the response says so.
+    const typo = await (await client.get('/api/search?q=' + encodeURIComponent('attatchment'))).json();
+    assert.ok(typo.results.length > 0, 'a typo should still find the message');
+    assert.equal(typo.fuzzy, true, 'the response should mark the results as near matches');
+    assert.ok(
+      typo.results.some((hit) => Array.isArray(hit.near) && hit.near.length > 0),
+      'a near-match hit should name the word it matched',
+    );
+    assert.equal(broader.fuzzy, false, 'an exact query never uses the fallback');
 
     // A secret pasted into a chat is redacted before it is written, so it can
     // never be found by searching afterwards.

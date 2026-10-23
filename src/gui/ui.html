@@ -344,6 +344,7 @@
       .search-hit .hit-head { display: flex; gap: 6px; align-items: baseline; font-size: 11px; color: var(--muted); }
       .search-hit .hit-chat { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
       .search-hit .hit-role { flex: none; text-transform: uppercase; letter-spacing: 0.04em; font-size: 9.5px; opacity: 0.8; }
+      .search-hit .hit-near { flex: none; color: var(--amber); font-size: 11px; line-height: 1; }
       .search-hit .hit-snippet {
         font: 11.5px/1.45 ui-monospace, "Cascadia Code", monospace;
         color: var(--muted);
@@ -433,6 +434,27 @@
         padding: 2px 2px 2px 12px;
         border-left: 2px solid var(--accent);
       }
+      /* Fenced code from a reply: its own dark panel, with token colors. */
+      .assistant .code-block {
+        margin: 8px 0;
+        padding: 9px 12px;
+        border: 1px solid var(--line);
+        border-radius: 8px;
+        background: #0b0f14;
+        overflow-x: auto;
+        white-space: pre-wrap;
+        word-break: break-word;
+        font: 12px/1.5 ui-monospace, "Cascadia Code", monospace;
+      }
+      .assistant .code-block code { font: inherit; }
+      .tok-com { color: var(--muted); font-style: italic; }
+      .tok-str { color: var(--green); }
+      .tok-num { color: var(--amber); }
+      .tok-key { color: var(--accent); font-weight: 600; }
+      .tok-fn { color: #d2a8ff; }
+      .tok-add { color: var(--green); }
+      .tok-del { color: var(--red); }
+      .tok-meta { color: var(--muted); }
       .tool {
         border: 1px solid var(--line);
         border-left: 3px solid var(--accent);
@@ -1623,6 +1645,208 @@
         scrollDown(false);
       }
 
+      // ---------------------------------------------------------------- colors
+      // ANSI SGR output from commands (npm test, git diff, colored logs) is
+      // rendered as spans instead of showing raw escape codes. Everything is
+      // built with textContent, so a tool result can never inject markup.
+      const ANSI_16 = [
+        '#484f58', '#ff7b72', '#7ee787', '#e3b341', '#79c0ff', '#d2a8ff', '#56d4dd', '#b1bac4',
+        '#6e7681', '#ffa198', '#56d364', '#e3b341', '#a5d6ff', '#d2a8ff', '#76e3ea', '#f0f6fc',
+      ];
+      const ANSI_RE = /\x1b\[([0-9;]*)m|\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g;
+      // An escape split across two stream chunks must not flash as text.
+      const ANSI_PARTIAL = /\x1b(?:\[[0-9;?]*|\][^\x07]*)?$/;
+
+      function ansi256(value) {
+        if (value < 16) return ANSI_16[value] || '';
+        if (value < 232) {
+          const n = value - 16;
+          const level = (v) => (v === 0 ? 0 : 55 + v * 40);
+          return `rgb(${level(Math.floor(n / 36))},${level(Math.floor((n % 36) / 6))},${level(n % 6)})`;
+        }
+        const gray = 8 + (value - 232) * 10;
+        return `rgb(${gray},${gray},${gray})`;
+      }
+
+      function freshAnsi() {
+        return { fg: '', bg: '', bold: false, dim: false, italic: false, underline: false, strike: false, inverse: false };
+      }
+
+      function applySgr(state, params) {
+        const codes = params === '' ? [0] : params.split(';').map((part) => (part === '' ? 0 : Number(part)));
+        for (let i = 0; i < codes.length; i += 1) {
+          const code = codes[i];
+          if (code === 0) Object.assign(state, freshAnsi());
+          else if (code === 1) state.bold = true;
+          else if (code === 2) state.dim = true;
+          else if (code === 3) state.italic = true;
+          else if (code === 4) state.underline = true;
+          else if (code === 7) state.inverse = true;
+          else if (code === 9) state.strike = true;
+          else if (code === 22) { state.bold = false; state.dim = false; }
+          else if (code === 23) state.italic = false;
+          else if (code === 24) state.underline = false;
+          else if (code === 27) state.inverse = false;
+          else if (code === 29) state.strike = false;
+          else if (code === 39) state.fg = '';
+          else if (code === 49) state.bg = '';
+          else if (code >= 30 && code <= 37) state.fg = ANSI_16[code - 30];
+          else if (code >= 90 && code <= 97) state.fg = ANSI_16[code - 90 + 8];
+          else if (code >= 40 && code <= 47) state.bg = ANSI_16[code - 40];
+          else if (code >= 100 && code <= 107) state.bg = ANSI_16[code - 100 + 8];
+          else if ((code === 38 || code === 48) && Number.isFinite(codes[i + 1])) {
+            const target = code === 38 ? 'fg' : 'bg';
+            if (codes[i + 1] === 5 && Number.isFinite(codes[i + 2])) {
+              state[target] = ansi256(codes[i + 2]);
+              i += 2;
+            } else if (codes[i + 1] === 2 && [codes[i + 2], codes[i + 3], codes[i + 4]].every(Number.isFinite)) {
+              state[target] = `rgb(${codes[i + 2]},${codes[i + 3]},${codes[i + 4]})`;
+              i += 4;
+            }
+          }
+        }
+      }
+
+      function ansiRun(node, text, state) {
+        if (text === '') return;
+        const styled =
+          state.fg || state.bg || state.bold || state.dim || state.italic || state.underline || state.strike || state.inverse;
+        if (!styled) {
+          node.appendChild(document.createTextNode(text));
+          return;
+        }
+        const span = document.createElement('span');
+        const fg = state.fg || 'var(--muted)';
+        const bg = state.bg || '#0b0f14';
+        span.style.color = state.inverse ? bg : fg;
+        if (state.bg || state.inverse) span.style.backgroundColor = state.inverse ? fg : bg;
+        if (state.bold) span.style.fontWeight = '600';
+        if (state.dim) span.style.opacity = '0.7';
+        if (state.italic) span.style.fontStyle = 'italic';
+        const decoration = [state.underline ? 'underline' : '', state.strike ? 'line-through' : ''].filter(Boolean).join(' ');
+        if (decoration) span.style.textDecoration = decoration;
+        span.textContent = text;
+        node.appendChild(span);
+      }
+
+      /** `final` flushes a trailing incomplete escape instead of holding it back. */
+      function renderAnsi(node, raw, final = false) {
+        const text = final ? raw : raw.replace(ANSI_PARTIAL, '');
+        node.textContent = '';
+        const state = freshAnsi();
+        ANSI_RE.lastIndex = 0;
+        let cursor = 0;
+        for (let match; (match = ANSI_RE.exec(text)); ) {
+          if (match.index > cursor) ansiRun(node, text.slice(cursor, match.index), state);
+          if (match[1] !== undefined) applySgr(state, match[1]);
+          cursor = ANSI_RE.lastIndex;
+        }
+        if (cursor < text.length) ansiRun(node, text.slice(cursor), state);
+      }
+
+      // ------------------------------------------------------- code highlight
+      const CODE_KEYWORDS = new Set(
+        (
+          'const let var function return if else for while do switch case default break continue new class extends ' +
+          'import export from async await try catch finally throw typeof instanceof in of delete void yield static get set ' +
+          'def lambda pass raise with as except global nonlocal assert del elif ' +
+          'pub fn impl struct enum trait use mod match mut ref self super crate where loop ' +
+          'package interface type public private protected readonly implements namespace declare ' +
+          'true false null undefined none nil'
+        ).split(/\s+/),
+      );
+      const HASH_COMMENT = new Set(['py', 'python', 'sh', 'bash', 'shell', 'zsh', 'fish', 'rb', 'ruby', 'yml', 'yaml', 'toml', 'r', 'perl', 'pl', 'ps1', 'powershell']);
+      const SQL_COMMENT = new Set(['sql']);
+      const MARKUP_COMMENT = new Set(['html', 'xml', 'svg', 'vue']);
+
+      function commentPattern(language) {
+        if (HASH_COMMENT.has(language)) return '#[^\\n]*';
+        if (SQL_COMMENT.has(language)) return '--[^\\n]*';
+        if (MARKUP_COMMENT.has(language)) return '<!--[\\s\\S]*?-->';
+        return '\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\/';
+      }
+
+      /** A small dependency-free highlighter: comments, strings, numbers, keywords, calls. */
+      function highlightCode(code, language) {
+        const fragment = document.createDocumentFragment();
+        const lang = (language || '').toLowerCase();
+        if (lang === 'diff' || lang === 'patch') {
+          const lines = code.split('\n');
+          lines.forEach((line, index) => {
+            const kind = line.startsWith('@@') ? 'meta' : line.startsWith('+') ? 'add' : line.startsWith('-') ? 'del' : '';
+            if (kind) {
+              const span = document.createElement('span');
+              span.className = `tok-${kind}`;
+              span.textContent = line;
+              fragment.appendChild(span);
+            } else {
+              fragment.appendChild(document.createTextNode(line));
+            }
+            if (index < lines.length - 1) fragment.appendChild(document.createTextNode('\n'));
+          });
+          return fragment;
+        }
+        const pattern = new RegExp(
+          `(${commentPattern(lang)})|("(?:[^"\\\\\\n]|\\\\.)*"|'(?:[^'\\\\\\n]|\\\\.)*'|\`(?:[^\`\\\\]|\\\\.)*\`)|\\b(0x[0-9a-fA-F]+|\\d+(?:\\.\\d+)?)\\b|\\b([A-Za-z_$][\\w$]*)\\b`,
+          'g',
+        );
+        let cursor = 0;
+        for (let match; (match = pattern.exec(code)); ) {
+          if (match.index > cursor) fragment.appendChild(document.createTextNode(code.slice(cursor, match.index)));
+          const text = match[0];
+          let kind = match[1] ? 'com' : match[2] ? 'str' : match[3] ? 'num' : '';
+          if (kind === '' && CODE_KEYWORDS.has(text.toLowerCase())) kind = 'key';
+          if (kind === '' && code[pattern.lastIndex] === '(') kind = 'fn';
+          if (kind) {
+            const span = document.createElement('span');
+            span.className = `tok-${kind}`;
+            span.textContent = text;
+            fragment.appendChild(span);
+          } else {
+            fragment.appendChild(document.createTextNode(text));
+          }
+          cursor = pattern.lastIndex;
+        }
+        if (cursor < code.length) fragment.appendChild(document.createTextNode(code.slice(cursor)));
+        return fragment;
+      }
+
+      const FENCE_RE = /```([^\n`]*)\n?([\s\S]*?)(?:```|$)/g;
+
+      /** Splits a reply into text and ```fenced code blocks. */
+      function renderAssistant(node, text) {
+        node.textContent = '';
+        FENCE_RE.lastIndex = 0;
+        let cursor = 0;
+        for (let match; (match = FENCE_RE.exec(text)); ) {
+          if (match.index > cursor) node.appendChild(document.createTextNode(text.slice(cursor, match.index)));
+          const info = (match[1] || '').trim().split(/\s+/)[0] || '';
+          const block = document.createElement('pre');
+          block.className = 'code-block';
+          if (info) block.dataset.lang = info.toLowerCase();
+          const code = document.createElement('code');
+          code.appendChild(highlightCode(match[2] || '', info));
+          block.appendChild(code);
+          node.appendChild(block);
+          cursor = FENCE_RE.lastIndex;
+        }
+        if (cursor < text.length) node.appendChild(document.createTextNode(text.slice(cursor)));
+      }
+
+      function pushToolOutput(text) {
+        const tool = activeTool;
+        if (!tool) return;
+        tool.raw += text;
+        if (tool.frame) return;
+        tool.frame = requestAnimationFrame(() => {
+          tool.frame = 0;
+          // A notice or a new tool may have replaced it before the frame ran.
+          if (activeTool !== tool) return;
+          renderAnsi(tool.out, tool.raw);
+          scrollDown(false);
+        });
+      }
+
       function addTool(name, args) {
         assistantBlock = null;
         const card = document.createElement('div');
@@ -1645,7 +1869,7 @@
 
         card.append(head, out);
         log.appendChild(card);
-        activeTool = { card, out };
+        activeTool = { card, out, raw: '', frame: 0 };
         scrollDown(false);
       }
 
@@ -1665,9 +1889,10 @@
 
       function finishTool(name, content, isError) {
         if (!activeTool) return;
-        const { card, out } = activeTool;
+        const { card, out, frame } = activeTool;
+        if (frame) cancelAnimationFrame(frame);
         card.classList.add(isError ? 'error' : 'done');
-        out.textContent = content || '';
+        renderAnsi(out, content || '', true);
         activeTool = null;
         scrollDown(false);
       }
@@ -2306,7 +2531,11 @@
           if (message.role === 'user') {
             addUser(message.content || '', message.attachments || []).dataset.searchIndex = String(position);
           } else if (message.role === 'assistant') {
-            if (message.content) add('assistant', message.content).dataset.searchIndex = String(position);
+            if (message.content) {
+              const block = add('assistant');
+              renderAssistant(block, message.content);
+              block.dataset.searchIndex = String(position);
+            }
             for (const call of message.toolCalls || []) {
               addTool(call.name, call.args || {});
               const result = results.get(call.id);
@@ -2487,6 +2716,8 @@
             addAssistantChunk(event.text);
             break;
           case 'text-end':
+            // Highlight once the reply is complete, not on every streamed token.
+            if (assistantBlock) renderAssistant(assistantBlock, assistantBlock.textContent || '');
             assistantBlock = null;
             break;
           case 'tool-start':
@@ -2494,8 +2725,7 @@
             break;
           case 'tool-output':
             if (activeTool) {
-              activeTool.out.textContent += event.text;
-              scrollDown(false);
+              pushToolOutput(event.text);
             }
             break;
           case 'tool-end':
@@ -2790,10 +3020,11 @@
         const status = document.createElement('div');
         status.className = 'search-status';
         const hits = body.results.length;
+        const near = body.fuzzy === true;
         status.textContent =
           hits === 0
             ? 'No message matches that query.'
-            : `${hits}${body.truncated ? '+' : ''} message${hits === 1 ? '' : 's'} in ${body.chatsScanned} chat${body.chatsScanned === 1 ? '' : 's'}` +
+            : `${near ? 'No exact match — showing near matches (typos tolerated). ' : ''}${hits}${body.truncated ? '+' : ''} message${hits === 1 ? '' : 's'} in ${body.chatsScanned} chat${body.chatsScanned === 1 ? '' : 's'}` +
               (body.truncated ? ' — narrow the query to see the rest.' : '');
         searchResults.append(status);
 
@@ -2811,11 +3042,25 @@
           const role = document.createElement('span');
           role.className = 'hit-role';
           role.textContent = hit.role === 'tool' && hit.tool ? hit.tool : hit.role;
-          head.append(chatName, role);
+          head.append(chatName);
+          if (Array.isArray(hit.near) && hit.near.length > 0) {
+            const approx = document.createElement('span');
+            approx.className = 'hit-near';
+            approx.textContent = '≈';
+            approx.title = 'Near match (one typo tolerated)';
+            head.append(approx);
+          }
+          head.append(role);
 
           const snippet = document.createElement('span');
           snippet.className = 'hit-snippet';
-          renderSnippet(snippet, hit.snippet || '', body.parsed);
+          // Highlight the words the fallback actually matched, not just the
+          // literal query terms (those differ by a typo).
+          const parsed = body.parsed || {};
+          renderSnippet(snippet, hit.snippet || '', {
+            terms: [...(parsed.terms || []), ...(Array.isArray(hit.near) ? hit.near : [])],
+            phrases: parsed.phrases || [],
+          });
 
           button.append(head, snippet);
           button.addEventListener('click', () => void jumpToHit(hit));
