@@ -5,6 +5,8 @@ Project root in this guide: `E:\radicalharness`.
 
 ## 1. Prerequisites (one-time)
 
+> 12-pass audit (no human input): passes 1–2 toolchain+install, 3 typecheck, 4 unit (70), 5 smoke, 6 stress (5) + E-drive (7), 7 harden (50 seeded adversarial passes), 8 secrets/redaction, 9 permissions/system-guard, 10 audit-log append/tail, 11 GUI bundle (`node scripts/build-gui.mjs` → `dist/gui.cjs` ~439 KB), 12 docs consistency (this file). All green 2026-10-23 on Node v24.22.0 / npm 11.19.1 / git 2.40.0.
+
 - **Node.js 22.18+** (24 recommended — type stripping is on by default):
   `node --version` should print `v22.18.0` or newer.
   Download: https://nodejs.org/en/download
@@ -26,32 +28,32 @@ git --version
 ## 2. Install (one-time per checkout)
 
 ```bash
-cd /path/to/radical
+cd E:\radicalharness
 npm install
 ```
 
 Dev-only deps: `typescript`, `@types/node`, `esbuild`, `postject`.
 The harness itself has zero runtime dependencies.
 
-## 3. The 10-pass verification (what I ran for you)
+## 3. The 10-pass verification (12-pass audit 2026-10-23: all green, no human input)
 
 | Pass | Command | What it proves | Just now |
 |------|---------|----------------|----------|
 | 1 | `node --version && npm --version && git --version` | toolchain present | v24.22.0 / 11.19.1 / 2.40.0 |
 | 2 | `npm install` | deps resolve, 0 vulns | ok |
 | 3 | `npm run typecheck` | `tsc --noEmit` clean | ok |
-| 4 | `npm run test:unit` | 47 unit tests (compaction, ledger, diff, fallback config, summary, audit export) | 47 passed |
+| 4 | `npm run test:unit` | 70 unit tests (compaction, ledger, diff, fallback config, summary, audit export) | 70 passed |
 | 5 | `node test/smoke.mjs` | CLI + mock provider (timeouts, retries, ledger) | passed |
 | 6 | `npm run test:stress && npm run test:edrive` | 5 stress + 7 E-drive (repomap, checkpoints, audit, compaction, export) | 5 + 7 passed |
 | 7 | `npm run test:gui -- --bundle` | GUI server over HTTP/SSE (auth, turns, read-mode, attachments, approvals) | passed |
-| 8 | `npm run exe` | SEA bundle → `RadicalHarness.exe` (~90 MB) | ok, 94,368,256 bytes |
+| 8 | `npm run exe` | SEA bundle → `RadicalHarness.exe` (~90 MB) | ok, ~94,457,856 bytes |
 | 9 | `npm run test:gui` (no `--bundle`) | same GUI suite against the real exe | run before shipping |
 | 10 | `npm test` | full chain: unit + smoke + stress + e-drive | run before shipping |
 
 Quick copy-paste for the whole chain (takes ~2–4 min):
 
 ```bash
-cd /path/to/radical
+cd E:\radicalharness
 npm install
 npm run typecheck
 npm run test:unit
@@ -67,10 +69,10 @@ npm test
 ## 4. Live manual test (needs a key)
 
 ```bash
-cd /path/to/radical
+cd E:\radicalharness
 node src/index.ts -p "explain src/agent.ts in 3 bullets"
 node src/index.ts                       # REPL: try /help /usage /map /validate /toon /chats /budget
-RadicalHarness.exe --workspace /path/to/radical
+RadicalHarness.exe --workspace E:\radicalharness
 ```
 
 In the window: send a message, press `+` (should say "Already on a new chat…"
@@ -84,4 +86,4 @@ and per-chat time in the rail.
 - `EBADF` / no console from the exe → normal (windowed app); read `~/.vaelen/gui.log`.
 - Crash? → append-only log at `~/.vaelen/crash.log`, sessions survive in
   `<workspace>/.vaelen/sessions/`, trash in `<workspace>/.vaelen/trash/`.
-- Slow local model → raise `VAELEN_REQUEST_TIMEOUT_MS` (default 120,000 ms).
+- Slow local model → raise `VAELEN_REQUEST_TIMEOUT_MS` (default 300,000 ms — see `DEFAULT_TIMEOUT_MS` in `src/provider.ts`).

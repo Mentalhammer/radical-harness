@@ -2,7 +2,7 @@
 
 A small coding agent harness for the terminal. It runs a model against your project with real file and shell access, streams output, runs commands without asking, refuses system-level operations, and saves every session to disk.
 
-~6,500 lines of TypeScript plus its single-page window, zero runtime dependencies: Node's built-in `fetch` for the provider, `node:readline` for the UI. TypeScript sources run directly through Node's type stripping.
+~9,100 lines of TypeScript in src/ (~11,600 with the GUI server) plus its single-page window, zero runtime dependencies: Node's built-in `fetch` for the provider, `node:readline` for the UI. TypeScript sources run directly through Node's type stripping.
 
 ```
 › add pagination to the posts endpoint and run the tests
