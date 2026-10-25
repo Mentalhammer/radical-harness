@@ -571,6 +571,70 @@
       }
       .composer button.attach:hover:not(:disabled) { color: var(--text); }
       .composer button.attach svg { display: block; margin: 0 auto; }
+      .history-panel {
+        max-width: 860px;
+        margin: 0 auto 9px;
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        background: var(--panel-2);
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+        overflow: hidden;
+      }
+      .history-panel[hidden] { display: none; }
+      .history-head {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px 9px;
+        border-bottom: 1px solid var(--line);
+      }
+      .history-head input {
+        flex: 1;
+        min-width: 0;
+        padding: 6px 9px;
+        border: 1px solid var(--line);
+        border-radius: 7px;
+        background: #0b0f14;
+        color: var(--text);
+        font: inherit;
+        font-size: 12.5px;
+      }
+      .history-head input:focus { outline: none; border-color: var(--accent); }
+      .history-head button { padding: 5px 9px; font-size: 11.5px; }
+      .history-head button.danger { color: var(--red); }
+      .history-list {
+        max-height: 46vh;
+        overflow-y: auto;
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        padding: 6px;
+      }
+      .history-item {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        width: 100%;
+        padding: 7px 9px;
+        text-align: left;
+        background: transparent;
+        border: 1px solid transparent;
+        border-radius: 7px;
+        color: var(--text);
+        font-size: 12.5px;
+      }
+      .history-item:hover:not(:disabled),
+      .history-item.active { background: var(--panel); border-color: var(--line); }
+      .history-item .history-text {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .history-item .history-when { flex: none; color: var(--muted); font-size: 10.5px; }
+      .history-empty { padding: 16px 10px; color: var(--muted); font-size: 12px; text-align: center; }
+      .history-hint { padding: 6px 10px 8px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
       .staged {
         max-width: 860px;
         margin: 0 auto 8px;
@@ -821,6 +885,15 @@
 
         <footer>
       <div class="drop-hint" id="drop-hint" hidden>Drop files or a folder to attach images and text</div>
+      <div class="history-panel" id="history-panel" hidden role="dialog" aria-label="Prompt history">
+        <div class="history-head">
+          <input id="history-search" type="search" placeholder="Search prompt history…" autocomplete="off" spellcheck="false" aria-label="Search prompt history" />
+          <button id="history-clear" class="danger" type="button" title="Delete every saved prompt">Clear</button>
+          <button id="history-close" type="button" title="Close prompt history" aria-label="Close prompt history">×</button>
+        </div>
+        <div class="history-list" id="history-list" role="listbox" aria-label="Previous prompts"></div>
+        <div class="history-hint">Click a prompt to load it · ↑/↓ to browse · Enter to load · Esc to close</div>
+      </div>
       <div class="staged" id="staged" hidden></div>
       <form class="composer" id="composer">
         <button class="attach" id="attach" type="button" title="Attach images or text files" aria-label="Attach files">+</button>
@@ -830,13 +903,20 @@
             <circle cx="12" cy="13" r="3.2" />
           </svg>
         </button>
+        <button class="attach" id="history" type="button" title="Prompt history (Shift+↑ recalls the last one)" aria-label="Prompt history">
+          <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12 8v4l3 2" />
+            <path d="M3.5 12a8.5 8.5 0 1 0 2.6-6.1" />
+            <path d="M3 4v4h4" />
+          </svg>
+        </button>
         <input id="file-input" type="file" multiple hidden />
         <textarea id="input" rows="1" placeholder="Ask Radical to change something in this project…"></textarea>
         <button class="primary" id="send" type="submit">Send</button>
         <button id="stop" type="button" hidden>Stop</button>
       </form>
       <div class="hint">
-        <span>Enter to send · Shift+Enter for a new line · Enter also steers while the agent works · Paste, drop, or capture a screenshot</span>
+        <span>Enter to send · Shift+Enter for a new line · Shift+↑ recalls earlier prompts · Paste, drop, or capture a screenshot</span>
         <span class="status" id="status"><span class="dot"></span><span id="status-label">idle</span></span>
       </div>
     </footer>
@@ -952,6 +1032,12 @@
       const stagedEl = document.getElementById('staged');
       const attachButton = document.getElementById('attach');
       const screenshotButton = document.getElementById('screenshot');
+      const historyButton = document.getElementById('history');
+      const historyPanel = document.getElementById('history-panel');
+      const historySearch = document.getElementById('history-search');
+      const historyList = document.getElementById('history-list');
+      const historyClear = document.getElementById('history-clear');
+      const historyClose = document.getElementById('history-close');
       const chatList = document.getElementById('chat-list');
       const newChatButton = document.getElementById('new-chat');
       const recoverButton = document.getElementById('chat-recover');
@@ -983,6 +1069,20 @@
       let activeTool = null;
       let busy = false;
       let composing = false;
+      // Declared before loadPromptHistory() runs below: a `const` further down
+      // would still be in its temporal dead zone and the read would fail.
+      const HISTORY_KEY = 'radical.promptHistory';
+      const HISTORY_LIMIT = 200;
+      /** Prompts sent from this browser, newest first (localStorage). */
+      let promptHistory = loadPromptHistory();
+      /** Index into promptHistory while Shift+↑/↓ browses it; -1 when not. */
+      let historyCursor = -1;
+      /** What was typed before the first Shift+↑, restored past the newest prompt. */
+      let historyDraft = '';
+      /** Highlighted row in the open history list; -1 when nothing matches. */
+      let historyActive = -1;
+      let historyFiltered = [];
+      let historyClearTimer = 0;
       let currentWorkspace = '';
       /** Open repository, or null for "no repository" (plain local folder). */
       let currentRepo = null;
@@ -1564,6 +1664,150 @@
         }
       }
 
+      // -------------------------------------------------------- prompt history
+      // Prompts this window sends are kept newest-first in localStorage, so
+      // Shift+↑ recalls them in any chat and the clock button lists them all.
+      // The key is global on purpose: history is a personal habit, not chat data.
+      function loadPromptHistory() {
+        try {
+          const raw = localStorage.getItem(HISTORY_KEY);
+          const list = raw ? JSON.parse(raw) : [];
+          if (!Array.isArray(list)) return [];
+          return list
+            .filter((item) => item && typeof item.text === 'string' && item.text.trim() !== '')
+            .map((item) => ({ text: item.text, at: Number(item.at) || 0 }))
+            .slice(0, HISTORY_LIMIT);
+        } catch {
+          return [];
+        }
+      }
+
+      function persistPromptHistory() {
+        try {
+          localStorage.setItem(HISTORY_KEY, JSON.stringify(promptHistory));
+        } catch {
+          // A full or unavailable localStorage must not break sending.
+        }
+      }
+
+      /** Records a sent prompt, moving an identical older one to the top. */
+      function recordPrompt(text) {
+        const trimmed = text.trim();
+        if (trimmed === '') return;
+        const existing = promptHistory.findIndex((item) => item.text === trimmed);
+        if (existing !== -1) promptHistory.splice(existing, 1);
+        promptHistory.unshift({ text: trimmed, at: Date.now() });
+        if (promptHistory.length > HISTORY_LIMIT) promptHistory.length = HISTORY_LIMIT;
+        historyCursor = -1;
+        historyDraft = '';
+        persistPromptHistory();
+        if (!historyPanel.hidden) renderPromptHistory();
+      }
+
+      function setComposerText(text) {
+        input.value = text;
+        resizeInput();
+        saveDraft(text);
+        updateSendState();
+        input.focus();
+        input.setSelectionRange(text.length, text.length);
+      }
+
+      /**
+       * Steps through history: delta +1 is older, -1 is newer. The draft that was
+       * in the composer is remembered and restored when browsing runs past the
+       * newest entry, so a half-written message is never lost.
+       */
+      function recallHistory(delta) {
+        if (promptHistory.length === 0) return false;
+        if (historyCursor === -1) {
+          if (delta < 0) return false;
+          historyDraft = input.value;
+          historyCursor = 0;
+        } else {
+          historyCursor += delta;
+        }
+        if (historyCursor < 0 || historyCursor >= promptHistory.length) {
+          historyCursor = -1;
+          setComposerText(historyDraft);
+          historyDraft = '';
+          return true;
+        }
+        setComposerText(promptHistory[historyCursor].text);
+        return true;
+      }
+
+      function describePromptWhen(at) {
+        if (!at) return '';
+        const date = new Date(at);
+        if (Number.isNaN(date.getTime())) return '';
+        const now = new Date();
+        const sameDay = date.toDateString() === now.toDateString();
+        if (sameDay) {
+          return date.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+        }
+        const options = { month: 'short', day: 'numeric' };
+        if (date.getFullYear() !== now.getFullYear()) options.year = 'numeric';
+        return date.toLocaleDateString(undefined, options);
+      }
+
+      function renderPromptHistory() {
+        const needle = historySearch.value.trim().toLowerCase();
+        historyFiltered =
+          needle === '' ? promptHistory : promptHistory.filter((item) => item.text.toLowerCase().includes(needle));
+        historyList.replaceChildren();
+        if (historyFiltered.length === 0) {
+          historyActive = -1;
+          const empty = document.createElement('div');
+          empty.className = 'history-empty';
+          empty.textContent =
+            promptHistory.length === 0 ? 'No prompts yet — send one and it appears here.' : 'No prompts match that search.';
+          historyList.append(empty);
+          return;
+        }
+        if (historyActive >= historyFiltered.length) historyActive = historyFiltered.length - 1;
+        if (historyActive < 0) historyActive = 0;
+        historyFiltered.forEach((item, index) => {
+          const row = document.createElement('button');
+          row.type = 'button';
+          row.className = 'history-item' + (index === historyActive ? ' active' : '');
+          row.title = item.text;
+          row.setAttribute('role', 'option');
+          row.setAttribute('aria-selected', index === historyActive ? 'true' : 'false');
+          const text = document.createElement('span');
+          text.className = 'history-text';
+          // The list is one line per prompt; the full text lands in the composer.
+          text.textContent = item.text.replace(/\s+/g, ' ').trim();
+          const when = document.createElement('span');
+          when.className = 'history-when';
+          when.textContent = describePromptWhen(item.at);
+          row.append(text, when);
+          row.addEventListener('click', () => choosePrompt(item));
+          historyList.append(row);
+        });
+      }
+
+      function choosePrompt(item) {
+        historyCursor = promptHistory.indexOf(item);
+        historyDraft = '';
+        setComposerText(item.text);
+        closePromptHistory();
+      }
+
+      function openPromptHistory() {
+        historySearch.value = '';
+        historyActive = promptHistory.length > 0 ? 0 : -1;
+        renderPromptHistory();
+        historyPanel.hidden = false;
+        historySearch.focus();
+        historySearch.select();
+      }
+
+      function closePromptHistory() {
+        historyPanel.hidden = true;
+        input.focus();
+      }
+
       async function send() {
         const text = input.value.trim();
         if (text === '' && staged.length === 0) return;
@@ -1583,6 +1827,7 @@
             addNotice(body?.error || 'Could not send that guidance.', 'error');
             return;
           }
+          recordPrompt(text);
           input.value = '';
           resizeInput();
           saveDraft('');
@@ -1630,6 +1875,7 @@
         if (body.chatId && currentChatId === target) currentChatId = body.chatId;
         if (body.chatId === currentChatId) pendingSendId = null;
 
+        recordPrompt(text);
         input.value = '';
         resizeInput();
         saveDraft('');
@@ -2887,6 +3133,20 @@
       input.addEventListener('keydown', (event) => {
         // Enter in an IME picker must select a candidate, never send the message.
         if (event.isComposing || composing || event.keyCode === 229) return;
+        // Shift+↑ recalls older prompts from an empty composer (or caret at the
+        // very start); Shift+↓ walks back toward what was being typed. While
+        // browsing either key keeps stepping, even on a multi-line prompt.
+        if (
+          event.shiftKey &&
+          !event.altKey &&
+          !event.ctrlKey &&
+          !event.metaKey &&
+          (event.key === 'ArrowUp' || event.key === 'ArrowDown') &&
+          (historyCursor >= 0 || (event.key === 'ArrowUp' && input.selectionStart === 0 && input.selectionEnd === 0))
+        ) {
+          if (recallHistory(event.key === 'ArrowUp' ? 1 : -1)) event.preventDefault();
+          return;
+        }
         if (event.key !== 'Enter' || event.shiftKey) return;
         event.preventDefault();
         void send();
@@ -2921,6 +3181,58 @@
 
       attachButton.addEventListener('click', () => fileInput.click());
       screenshotButton.addEventListener('click', () => void captureScreenshot());
+      historyButton.addEventListener('click', () => {
+        if (historyPanel.hidden) openPromptHistory();
+        else closePromptHistory();
+      });
+      historyClose.addEventListener('click', () => closePromptHistory());
+      historySearch.addEventListener('input', () => {
+        historyActive = 0;
+        renderPromptHistory();
+      });
+      historySearch.addEventListener('keydown', (event) => {
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault();
+          if (historyFiltered.length === 0) return;
+          const step = event.key === 'ArrowDown' ? 1 : -1;
+          historyActive = (historyActive + step + historyFiltered.length) % historyFiltered.length;
+          renderPromptHistory();
+          const row = historyList.children[historyActive];
+          if (row && row.scrollIntoView) row.scrollIntoView({ block: 'nearest' });
+        } else if (event.key === 'Enter') {
+          event.preventDefault();
+          const item = historyFiltered[historyActive];
+          if (item) choosePrompt(item);
+        }
+      });
+      // Escape closes from the search field or from a focused Clear/Close button.
+      historyPanel.addEventListener('keydown', (event) => {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        closePromptHistory();
+      });
+      // A clear is two clicks: history is the only copy of those prompts.
+      historyClear.addEventListener('click', () => {
+        if (promptHistory.length === 0) return;
+        if (historyClearTimer === 0) {
+          historyClear.textContent = 'Delete all?';
+          historyClearTimer = window.setTimeout(() => {
+            historyClearTimer = 0;
+            historyClear.textContent = 'Clear';
+          }, 4000);
+          return;
+        }
+        window.clearTimeout(historyClearTimer);
+        historyClearTimer = 0;
+        historyClear.textContent = 'Clear';
+        promptHistory = [];
+        historyCursor = -1;
+        historyDraft = '';
+        historyActive = -1;
+        persistPromptHistory();
+        renderPromptHistory();
+        addNotice('Prompt history cleared.');
+      });
       if (!navigator.mediaDevices || typeof navigator.mediaDevices.getDisplayMedia !== 'function') {
         screenshotButton.hidden = true;
       }

@@ -203,6 +203,9 @@ async function main() {
     assert.match(pageHtml, /id="chat-list"/, 'the sidebar should render the saved chat tabs');
     assert.match(pageHtml, /id="new-chat"/, 'the sidebar should offer a new chat button');
     assert.match(pageHtml, /id="prompt-bar"/, 'the chat should render the current prompt bar');
+    assert.match(pageHtml, /id="history-panel"/, 'the composer should offer a clickable prompt history');
+    assert.match(pageHtml, /radical\.promptHistory/, 'prompt history should persist in localStorage');
+    assert.match(pageHtml, /function recallHistory/, 'Shift+Up should recall earlier prompts');
     assert.match(pageHtml, /function setPromptBar/, 'the prompt bar should follow the open chat');
     assert.match(pageHtml, /function renderAnsi/, 'tool output should render ANSI colors');
     assert.match(pageHtml, /function renderAssistant/, 'replies should highlight fenced code');
