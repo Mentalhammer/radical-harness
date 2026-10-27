@@ -1307,7 +1307,15 @@ async function main() {
     assert.equal(wsHangSend.status, 202, 'the second chat starts a turn that will not finish');
     const wsHangChat = (await wsHangSend.json()).chatId;
     assert.notEqual(wsHangChat, wsIdleChat, 'the two chats are different transcripts');
-    const hangingState = await (await client2.get('/api/state')).json();
+    // The server lists a live chat independently of its file, so this read carries
+    // the row already; the retries only absorb a state read that landed before the
+    // server had the chat in hand on a loaded machine.
+    let hangingState = await (await client2.get('/api/state')).json();
+    const railDeadline = Date.now() + 2000;
+    while (Date.now() < railDeadline && !hangingState.chats.some((chat) => chat.id === wsHangChat)) {
+      await new Promise((done) => setTimeout(done, 25));
+      hangingState = await (await client2.get('/api/state')).json();
+    }
     assert.equal(hangingState.busy, true, 'the hanging chat is busy while the switch happens');
     const hangingRow = hangingState.chats.find((chat) => chat.id === wsHangChat);
     assert.ok(hangingRow, 'the rail lists the running chat');

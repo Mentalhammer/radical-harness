@@ -1056,9 +1056,14 @@ async function main(): Promise<void> {
     };
   }
 
-  /** Saved chats, newest first. Empty transcripts (crashed before a message) are ignored. */
+  /**
+   * Saved chats, newest first. Empty transcripts (crashed before a message) are
+   * ignored, but a chat that is live in this process is listed even while its file
+   * is still empty: the window renders the rail from this list and nothing else.
+   */
   function chatSummaries(): ChatSummary[] {
     const summaries: ChatSummary[] = [];
+    const listed = new Set<string>();
     // Every project the window knows about: chats are per folder, so the rail is
     // the union of those folders' transcripts rather than one session directory.
     for (const folder of workspaceFolders()) {
@@ -1124,7 +1129,31 @@ async function main(): Promise<void> {
           needsApproval: (live?.approvals.size ?? 0) > 0 || (live?.questions.size ?? 0) > 0,
           turnStartedAt: live?.turnStartedAt ?? null,
         });
+        listed.add(id);
       }
+    }
+
+    // A chat exists in memory from the moment it opens, while its transcript only
+    // reaches disk once the session stream flushes — after the turn has started and
+    // broadcast its rail. The loop above only decorates rows a file produced, so
+    // without this pass a turn that is running right now can be absent from the
+    // rail for its whole duration.
+    for (const chat of chats.values()) {
+      if (chat.id === '' || listed.has(chat.id)) continue;
+      const messages = chat.messages.filter((message) => message.role !== 'system');
+      // An untouched new chat is not worth a row; it appears with its first prompt.
+      if (messages.length === 0 && !chat.busy) continue;
+      summaries.push({
+        id: chat.id,
+        title: chatTitle(messages),
+        updatedAt: new Date(chat.turnStartedAt ?? Date.now()).toISOString(),
+        messages: messages.length,
+        workspace: chat.workspace,
+        timeMs: chat.timeMs,
+        busy: chat.busy,
+        needsApproval: chat.approvals.size > 0 || chat.questions.size > 0,
+        turnStartedAt: chat.turnStartedAt,
+      });
     }
 
     return summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
